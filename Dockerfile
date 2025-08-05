@@ -66,13 +66,12 @@ ENV PATH=/home/facematch/.local/bin:$PATH
 COPY infrastructure/ infrastructure/
 COPY requirements.txt .
 COPY download_models.sh .
-COPY startup.sh .
 
-# Create models directory
-        RUN mkdir -p models faces logs static && chown -R facematch:facematch /app
+# Create directories
+RUN mkdir -p models faces logs static && chown -R facematch:facematch /app
 
 # Make scripts executable
-RUN chmod +x download_models.sh startup.sh
+RUN chmod +x download_models.sh
 
 # Switch to non-root user
 USER facematch
@@ -84,5 +83,5 @@ HEALTHCHECK --interval=30s --timeout=30s --start-period=60s --retries=3 \
 # Expose port
 EXPOSE ${PORT}
 
-# Use startup script as entrypoint
-CMD ["./startup.sh"]
+# Start the server directly
+CMD ["python", "-m", "infrastructure.facematch.server", "--host", "0.0.0.0", "--port", "8000"]
