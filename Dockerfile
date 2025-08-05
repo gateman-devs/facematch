@@ -6,7 +6,7 @@ FROM python:3.10-slim as builder
 # Set working directory
 WORKDIR /app
 
-# Install build dependencies
+# Install build dependencies and dlib pre-requisites
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -18,9 +18,24 @@ RUN apt-get update && apt-get install -y \
     libboost-python-dev \
     curl \
     wget \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    libavcodec-dev \
+    libavformat-dev \
+    libswscale-dev \
+    libv4l-dev \
+    libxvidcore-dev \
+    libx264-dev \
+    libgtk-3-dev \
+    libatlas-base-dev \
+    gfortran \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements and install Python dependencies
+# Install dlib first (heaviest dependency)
+RUN pip install --no-cache-dir dlib
+
+# Copy requirements and install remaining Python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
@@ -48,6 +63,9 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     curl \
     wget \
+    libjpeg62-turbo \
+    libpng16-16 \
+    libtiff5 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
