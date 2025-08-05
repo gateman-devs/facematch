@@ -10,15 +10,19 @@ services:
       - "8000:8000"
     environment:
       - PORT=8000
+      - REDIS_URL=redis://redis:6379
       - SIMILARITY_THRESHOLD=0.6
       - MAX_IMAGE_SIZE=10485760
       - REQUEST_TIMEOUT=30
       - MAX_IMAGE_DIMENSION=1024
+      - SESSION_TTL=300
     volumes:
       # Mount models directory for persistence
       - ./models:/app/models:rw
       # Mount logs directory for debugging
       - ./logs:/app/logs:rw
+      # Mount static files for eye tracking frontend
+      - ./static:/app/static:rw
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -28,16 +32,27 @@ services:
       start_period: 120s
     networks:
       - facematch-network
+    depends_on:
+      - redis
 
-  # Optional: Redis for caching (commented out as per requirements)
-  # redis:
-  #   image: redis:7-alpine
-  #   container_name: facematch-redis
-  #   ports:
-  #     - "6379:6379"
-  #   networks:
-  #     - facematch-network
-  #   restart: unless-stopped
+  # Redis for eye tracking session management
+  redis:
+    image: redis:7-alpine
+    container_name: facematch-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - facematch-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
 
 networks:
   facematch-network:
@@ -47,4 +62,6 @@ volumes:
   models:
     driver: local
   logs:
+    driver: local
+  redis_data:
     driver: local 

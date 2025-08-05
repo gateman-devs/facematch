@@ -10,7 +10,12 @@ from typing import Dict, List, Optional, Tuple, Union
 import numpy as np
 import cv2
 from mtcnn import MTCNN
-import tensorflow as tf
+try:
+    import tensorflow as tf
+    HAS_TENSORFLOW = True
+except ImportError:
+    HAS_TENSORFLOW = False
+    tf = None
 from PIL import Image
 
 # Configure logging
@@ -34,8 +39,10 @@ class FaceDetector:
     def _initialize_detector(self) -> None:
         """Initialize MTCNN detector with error handling."""
         try:
-            # Set TensorFlow to use CPU for MTCNN (more stable)
-            tf.config.set_visible_devices([], 'GPU')
+            # Set TensorFlow to use CPU for MTCNN (more stable) - if available
+            if HAS_TENSORFLOW and tf is not None:
+                tf.config.set_visible_devices([], 'GPU')
+            
             # Initialize MTCNN with correct parameters
             self.detector = MTCNN(device='CPU:0')
             logger.info("MTCNN face detector initialized successfully")

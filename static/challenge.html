@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eye Tracking Liveness Challenge</title>
+    <link rel="stylesheet" href="styles.css">
+    <style>
+        /* Additional styles for new challenge flow */
+        .challenge-step {
+            display: none;
+            animation: fadeIn 0.3s ease-in-out;
+        }
+        
+        .challenge-step.active {
+            display: block;
+        }
+        
+        .face-capture-container {
+            position: relative;
+            background: var(--bg-card);
+            border-radius: var(--border-radius-lg);
+            overflow: hidden;
+            box-shadow: var(--shadow-lg);
+            border: 2px solid var(--border-color);
+            max-width: 640px;
+            margin: 0 auto;
+        }
+        
+        .face-capture-video {
+            width: 100%;
+            height: auto;
+            display: block;
+            background: #000;
+            min-height: 300px;
+        }
+        
+        .face-detection-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+            z-index: 10;
+        }
+        
+        .face-outline-guide {
+            position: relative;
+            width: 200px;
+            height: 250px;
+            border: 3px solid rgba(79, 70, 229, 0.8);
+            border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+            background: rgba(79, 70, 229, 0.1);
+            animation: faceGuidePulse 2s ease-in-out infinite;
+        }
+        
+        .face-outline-guide.detected {
+            border-color: rgba(16, 185, 129, 0.8);
+            background: rgba(16, 185, 129, 0.1);
+            animation: none;
+        }
+        
+        @keyframes faceGuidePulse {
+            0%, 100% {
+                border-color: rgba(79, 70, 229, 0.8);
+                background: rgba(79, 70, 229, 0.1);
+            }
+            50% {
+                border-color: rgba(79, 70, 229, 0.6);
+                background: rgba(79, 70, 229, 0.05);
+            }
+        }
+        
+        .capture-status {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            right: 1rem;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 0.75rem 1rem;
+            border-radius: var(--border-radius);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            box-shadow: var(--shadow-sm);
+            z-index: 20;
+        }
+        
+        .capture-status.face-detected {
+            background: rgba(16, 185, 129, 0.95);
+            color: white;
+        }
+        
+        .capture-controls {
+            text-align: center;
+            margin-top: 2rem;
+        }
+        
+        .screen-detection-info {
+            background: var(--bg-secondary);
+            padding: 1.5rem;
+            border-radius: var(--border-radius);
+            margin: 1rem 0;
+            border-left: 4px solid var(--primary-color);
+        }
+        
+        .dynamic-grid {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            pointer-events: none;
+            z-index: 1000;
+            background: rgba(0, 0, 0, 0.1);
+        }
+        
+        .dynamic-area {
+            position: absolute;
+            border: 3px solid transparent;
+            background: rgba(79, 70, 229, 0.1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            font-weight: bold;
+            color: var(--text-secondary);
+            transition: all 0.3s ease;
+        }
+        
+        .dynamic-area.highlighted {
+            border-color: var(--primary-color);
+            background: var(--primary-color);
+            color: white;
+            box-shadow: 0 0 30px rgba(79, 70, 229, 0.6);
+            animation: pulse 1s infinite;
+        }
+        
+        .progress-overlay {
+            position: fixed;
+            top: 2rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 1rem 2rem;
+            border-radius: var(--border-radius-lg);
+            box-shadow: var(--shadow-lg);
+            z-index: 1001;
+            text-align: center;
+        }
+        
+        .step-indicator {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 1rem;
+            margin: 2rem 0;
+        }
+        
+        .step {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border-radius: var(--border-radius);
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            font-size: 0.9rem;
+        }
+        
+        .step.active {
+            background: var(--primary-color);
+            color: white;
+            border-color: var(--primary-color);
+        }
+        
+        .step.completed {
+            background: var(--success-color);
+            color: white;
+            border-color: var(--success-color);
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <!-- Header -->
+        <header class="header">
+            <h1>Eye Tracking Liveness Challenge</h1>
+            <p class="subtitle">Advanced liveness verification with eye movement tracking</p>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Step 1: Instructions -->
+            <div id="instructions-step" class="challenge-step active">
+                <div class="card">
+                    <h2>🎯 Liveness Challenge Instructions</h2>
+                    
+                    <div class="step-indicator">
+                        <div class="step active">
+                            <span>📋</span>
+                            <span>Instructions</span>
+                        </div>
+                        <div class="step">
+                            <span>👁️</span>
+                            <span>Face Setup</span>
+                        </div>
+                        <div class="step">
+                            <span>📱</span>
+                            <span>Screen Detection</span>
+                        </div>
+                        <div class="step">
+                            <span>🎯</span>
+                            <span>Challenge</span>
+                        </div>
+                    </div>
+                    
+                    <div class="instructions">
+                        <h3>How the Challenge Works:</h3>
+                        <ul>
+                            <li>🎯 <strong>Eye Movement Tracking:</strong> Follow highlighted areas with your eyes</li>
+                            <li>👁️ <strong>Face Positioning:</strong> Position your face within the guide outline</li>
+                            <li>📱 <strong>Screen Calibration:</strong> We'll detect your screen dimensions automatically</li>
+                            <li>⏱️ <strong>Timing:</strong> Each area will be highlighted for 3 seconds</li>
+                            <li>🎪 <strong>Sequence:</strong> Look at areas in the order they appear</li>
+                            <li>💡 <strong>Lighting:</strong> Ensure good lighting on your face</li>
+                        </ul>
+                        
+                        <div class="screen-detection-info">
+                            <h4>🔧 What We'll Detect:</h4>
+                            <ul>
+                                <li>Your screen resolution and dimensions</li>
+                                <li>Exact pixel coordinates for challenge areas</li>
+                                <li>A reference image of your face for matching</li>
+                                <li>Optimal challenge layout for your device</li>
+                            </ul>
+                        </div>
+                    </div>
+                    
+                    <button id="start-setup" class="btn btn-primary">
+                        Start Face Setup
+                    </button>
+                </div>
+            </div>
+
+            <!-- Step 2: Face Capture -->
+            <div id="face-setup-step" class="challenge-step">
+                <div class="card">
+                    <h2>👁️ Face Positioning & Capture</h2>
+                    
+                    <div class="step-indicator">
+                        <div class="step completed">
+                            <span>📋</span>
+                            <span>Instructions</span>
+                        </div>
+                        <div class="step active">
+                            <span>👁️</span>
+                            <span>Face Setup</span>
+                        </div>
+                        <div class="step">
+                            <span>📱</span>
+                            <span>Screen Detection</span>
+                        </div>
+                        <div class="step">
+                            <span>🎯</span>
+                            <span>Challenge</span>
+                        </div>
+                    </div>
+                    
+                    <p>Position your face within the outline and we'll capture a reference image:</p>
+                    
+                    <div class="face-capture-container">
+                        <video id="face-capture-video" class="face-capture-video" autoplay muted playsinline></video>
+                        
+                        <div class="face-detection-overlay">
+                            <div id="face-outline" class="face-outline-guide">
+                                <div style="position: absolute; bottom: -50px; left: 50%; transform: translateX(-50%); background: rgba(79, 70, 229, 0.9); color: white; padding: 0.5rem 1rem; border-radius: var(--border-radius); font-size: 0.9rem; font-weight: 500; white-space: nowrap;">
+                                    Position your face here
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div id="capture-status" class="capture-status">
+                            <span>📷</span>
+                            <span>Position your face in the outline</span>
+                        </div>
+                    </div>
+                    
+                    <div class="capture-controls">
+                        <button id="capture-face" class="btn btn-primary" disabled>
+                            Capture Face & Continue
+                        </button>
+                        <button id="back-to-instructions" class="btn btn-secondary">
+                            Back to Instructions
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 3: Screen Detection -->
+            <div id="screen-detection-step" class="challenge-step">
+                <div class="card">
+                    <h2>📱 Screen Calibration</h2>
+                    
+                    <div class="step-indicator">
+                        <div class="step completed">
+                            <span>📋</span>
+                            <span>Instructions</span>
+                        </div>
+                        <div class="step completed">
+                            <span>👁️</span>
+                            <span>Face Setup</span>
+                        </div>
+                        <div class="step active">
+                            <span>📱</span>
+                            <span>Screen Detection</span>
+                        </div>
+                        <div class="step">
+                            <span>🎯</span>
+                            <span>Challenge</span>
+                        </div>
+                    </div>
+                    
+                    <div class="processing-details">
+                        <div id="detection-status">Detecting screen dimensions...</div>
+                        <div class="progress-container">
+                            <div id="detection-progress" class="progress-bar">
+                                <div class="progress-fill"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="screen-info" style="display: none;">
+                        <h3>📊 Detected Screen Information:</h3>
+                        <div class="result-stats">
+                            <div class="stat">
+                                <span class="stat-label">Screen Resolution:</span>
+                                <span id="screen-resolution" class="stat-value">-</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Challenge Areas:</span>
+                                <span class="stat-value">6 areas (2×3 grid)</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Area Size:</span>
+                                <span id="area-size" class="stat-value">-</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="screen-detection-controls" style="display: none;">
+                        <button id="start-challenge" class="btn btn-primary">
+                            Start Eye Tracking Challenge
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 4: Challenge Execution -->
+            <div id="challenge-execution-step" class="challenge-step">
+                <!-- This will be populated dynamically with the full-screen challenge -->
+            </div>
+
+            <!-- Results Screen -->
+            <div id="results-step" class="challenge-step">
+                <div class="card">
+                    <div id="result-icon" class="result-icon">✅</div>
+                    <h2 id="result-title">Liveness Verified!</h2>
+                    <div id="result-details" class="result-details">
+                        <p id="result-message">Your eye movements have been successfully verified.</p>
+                        <div class="result-stats">
+                            <div class="stat">
+                                <span class="stat-label">Overall Accuracy:</span>
+                                <span id="overall-accuracy" class="stat-value">95%</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Processing Time:</span>
+                                <span id="processing-time" class="stat-value">2.3s</span>
+                            </div>
+                            <div class="stat">
+                                <span class="stat-label">Session ID:</span>
+                                <span id="session-id" class="stat-value">-</span>
+                            </div>
+                        </div>
+                        <div id="sequence-results" class="sequence-results"></div>
+                    </div>
+                    <div class="result-actions">
+                        <button id="new-challenge" class="btn btn-primary">New Challenge</button>
+                        <button id="download-report" class="btn btn-outline">Download Report</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Error Screen -->
+            <div id="error-step" class="challenge-step">
+                <div class="card">
+                    <div class="result-icon">❌</div>
+                    <h2>Challenge Failed</h2>
+                    <div class="error-details">
+                        <p id="error-message">An error occurred during the liveness challenge.</p>
+                        <div class="error-code">
+                            <strong>Error:</strong> <span id="error-code"></span>
+                        </div>
+                    </div>
+                    <div class="result-actions">
+                        <button id="retry-challenge" class="btn btn-primary">Retry Challenge</button>
+                        <button id="new-session" class="btn btn-secondary">New Session</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Dynamic Challenge Grid (shown during challenge) -->
+        <div id="dynamic-grid" class="dynamic-grid" style="display: none;">
+            <!-- Areas will be generated dynamically -->
+        </div>
+
+        <!-- Progress Overlay (shown during challenge) -->
+        <div id="progress-overlay" class="progress-overlay" style="display: none;">
+            <div id="current-instruction">Look at the highlighted area</div>
+            <div id="sequence-display">Sequence: <span id="sequence-numbers"></span></div>
+            <div id="countdown-display">3</div>
+            <div class="progress-container">
+                <div id="challenge-progress" class="progress-bar">
+                    <div class="progress-fill"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="challenge.js"></script>
+</body>
+</html> 

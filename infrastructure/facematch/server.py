@@ -7,19 +7,26 @@ import asyncio
 import logging
 import os
 import time
+import tempfile
+import shutil
+import json
 from contextlib import asynccontextmanager
-from typing import Dict, Optional, Any
+from typing import Dict, Optional, Any, List
 import uvicorn
 import numpy as np
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
 from .face_detection import FaceDetector, validate_image_quality
 from .liveness import LivenessDetector, validate_liveness_model
 from .facematch import FaceRecognizer, validate_arcface_model, adaptive_threshold
-from .image_utils import load_image_pair, validate_image_input, resize_image_if_needed
+from .image_utils import load_image_pair, validate_image_input
+from .simple_liveness import initialize_simple_liveness_detector, get_simple_liveness_detector
+# Advanced head pose removed - was causing startup issues
+from .redis_manager import initialize_session_manager, get_session_manager
 
 # Configure logging
 logging.basicConfig(
@@ -32,6 +39,7 @@ logger = logging.getLogger(__name__)
 face_detector = None
 liveness_detector = None
 face_recognizer = None
+simple_liveness_detector = None
 
 def convert_numpy_types(obj: Any) -> Any:
     """Convert numpy types to Python native types for JSON serialization."""
@@ -123,12 +131,120 @@ class FaceMatchResponse(BaseModel):
     error: Optional[str] = None
     error_details: Optional[Dict] = None
 
+class LivenessChallengeUrlResponse(BaseModel):
+    """Response model for liveness challenge URL creation."""
+    success: bool
+    challenge_url: Optional[str] = None
+    session_id: Optional[str] = None
+    expires_in: Optional[int] = None  # seconds until expiration
+    error: Optional[str] = None
+
+class LivenessInitiateResponse(BaseModel):
+    """Response model for liveness challenge initiation with screen data."""
+    success: bool
+    session_id: Optional[str] = None
+    sequence: Optional[List[int]] = None
+    area_duration: Optional[float] = None
+    total_duration: Optional[float] = None
+    screen_areas: Optional[List[Dict]] = None  # Real screen coordinates
+    instructions: Optional[str] = None
+    error: Optional[str] = None
+
+class LivenessSubmitResponse(BaseModel):
+    """Response model for liveness challenge submission."""
+    success: bool
+    session_id: Optional[str] = None
+    result: Optional[str] = None  # "pass" or "fail"
+    overall_accuracy: Optional[float] = None
+    sequence_results: Optional[List[Dict]] = None
+    processing_time: Optional[float] = None
+    error: Optional[str] = None
+
+class ImageLivenessRequest(BaseModel):
+    """Request model for image liveness check."""
+    image: str = Field(..., description="Image URL or base64 encoded image")
+    
+    @field_validator('image')
+    @classmethod
+    def validate_image(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Image field cannot be empty')
+        return v.strip()
+
+class ImageLivenessResponse(BaseModel):
+    """Response model for image liveness check."""
+    success: bool
+    passed: bool
+    liveness_score: float
+    face_detected: bool
+    processing_time: Optional[float] = None
+    anti_spoofing: Optional[Dict] = None
+    error: Optional[str] = None
+
+class FaceComparisonRequest(BaseModel):
+    """Request model for face comparison."""
+    image1: str = Field(..., description="First image (URL or base64)")
+    image2: str = Field(..., description="Second image (URL or base64)")
+    threshold: Optional[float] = Field(0.6, ge=0.0, le=1.0, description="Similarity threshold (0.0-1.0)")
+    
+    @field_validator('image1', 'image2')
+    @classmethod
+    def validate_images(cls, v):
+        if not v or len(v.strip()) == 0:
+            raise ValueError('Image fields cannot be empty')
+        return v.strip()
+
+class FaceComparisonResponse(BaseModel):
+    """Response model for face comparison."""
+    success: bool
+    match: bool
+    similarity_score: float
+    threshold: float
+    confidence: str
+    processing_time: Optional[float] = None
+    error: Optional[str] = None
+
+class VideoChallengeWithComparisonRequest(BaseModel):
+    """Request model for video challenge with optional face comparison."""
+    reference_image: Optional[str] = Field(None, description="Reference image for face comparison (URL or base64)")
+    enable_face_comparison: Optional[bool] = Field(False, description="Enable face comparison with reference image")
+    third_party_id: Optional[str] = Field(None, description="3rd party identifier for result tracking")
+    
+    @field_validator('reference_image')
+    @classmethod
+    def validate_reference_image(cls, v):
+        if v is not None and len(v.strip()) == 0:
+            raise ValueError('Reference image cannot be empty if provided')
+        return v.strip() if v else None
+    
+    @field_validator('third_party_id')
+    @classmethod
+    def validate_third_party_id(cls, v):
+        if v is not None and len(v.strip()) == 0:
+            raise ValueError('Third party ID cannot be empty if provided')
+        return v.strip() if v else None
+
+class LivenessResultResponse(BaseModel):
+    """Response model for fetching liveness results."""
+    success: bool
+    found: bool
+    session_id: Optional[str] = None
+    third_party_id: Optional[str] = None
+    result: Optional[str] = None  # "pass" or "fail"
+    passed: Optional[bool] = None
+    challenge_type: Optional[str] = None
+    processing_time: Optional[float] = None
+    stored_at: Optional[float] = None
+    expires_at: Optional[float] = None
+    details: Optional[Dict] = None
+    error: Optional[str] = None
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and cleanup application resources."""
-    global face_detector, liveness_detector, face_recognizer
+    global face_detector, liveness_detector, face_recognizer, simple_liveness_detector
     
-    logger.info("Initializing Face Recognition API...")
+    logger.info("Initializing Face Recognition API with Simple Liveness...")
     
     try:
         # Model paths
@@ -185,6 +301,35 @@ async def lifespan(app: FastAPI):
             logger.warning(f"ArcFace model not found at: {arcface_path}")
             model_validations['arcface'] = False
         
+        # Initialize simple liveness detector
+        try:
+            simple_liveness_detector = initialize_simple_liveness_detector()
+            model_validations['simple_liveness'] = True
+            logger.info("Simple liveness detector initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize simple liveness detector: {e}")
+            model_validations['simple_liveness'] = False
+        
+        # Initialize advanced 6DoF head pose estimator (temporarily disabled)
+        # try:
+        #     initialize_advanced_head_pose_estimator()
+        #     model_validations['advanced_head_pose'] = True
+        #     logger.info("Advanced 6DoF Head Pose Estimator initialized successfully")
+        # except Exception as e:
+        #     logger.error(f"Failed to initialize advanced head pose estimator: {e}")
+        #     model_validations['advanced_head_pose'] = False
+        model_validations['advanced_head_pose'] = False  # Temporarily disabled
+        logger.info("Advanced 6DoF Head Pose Estimator temporarily disabled, using legacy method")
+        
+        # Initialize Redis session manager
+        try:
+            redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
+            session_ttl = int(os.getenv('SESSION_TTL', '300'))  # 5 minutes
+            initialize_session_manager(redis_url, session_ttl)
+            logger.info("Redis session manager initialized")
+        except Exception as e:
+            logger.warning(f"Failed to initialize Redis session manager: {e}")
+        
         # Log initialization summary
         initialized_models = sum(model_validations.values())
         total_models = len(model_validations)
@@ -219,13 +364,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Mount static files for frontend
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
 @app.get("/health", response_model=HealthResponse)
 async def health_check(verbose: bool = False):
     """Health check endpoint with optional verbose details."""
     models_status = {
         'mtcnn': face_detector is not None,
         'crmnet': liveness_detector is not None,
-        'arcface': face_recognizer is not None
+        'arcface': face_recognizer is not None,
+        'simple_liveness': get_simple_liveness_detector() is not None
     }
     
     response_data = {
@@ -243,8 +392,10 @@ async def health_check(verbose: bool = False):
             'model_paths': {
                 'mtcnn': 'Built-in MTCNN',
                 'crmnet': '../../models/crmnet.onnx',
-                'arcface': '../../models/arcface_resnet50.onnx'
-            }
+                'arcface': '../../models/arcface_resnet50.onnx',
+                'eye_tracker': 'MediaPipe FaceMesh'
+            },
+            'session_stats': get_session_manager().get_session_stats() if get_session_manager() else None
         }
     
     return HealthResponse(**response_data)
@@ -552,17 +703,497 @@ async def match_faces(request: FaceMatchRequest):
         error_data = round_scores_in_response(error_data)
         return FaceMatchResponse(**error_data)
 
+@app.post("/create-simple-challenge")
+async def create_simple_challenge():
+    """
+    Create a new simple liveness challenge.
+    Randomly chooses between smile and head movement challenges.
+    """
+    try:
+        # Get simple liveness detector
+        detector = get_simple_liveness_detector()
+        if not detector:
+            raise HTTPException(
+                status_code=503,
+                detail="Simple liveness detector not available"
+            )
+        
+        # Generate random challenge
+        challenge = detector.generate_challenge()
+        
+        # Create simple session (no Redis needed for simple version)
+        session_id = f"simple_{int(time.time() * 1000)}"
+        
+        # Create mobile-friendly challenge URL
+        base_url = os.getenv('BASE_URL', 'http://localhost:8000')
+        challenge_url = f"{base_url}/static/simple.html?session={session_id}&type={challenge['type']}"
+        
+        # Add movement sequence to URL for head movement challenges
+        if challenge['type'] == 'head_movement' and 'movement_sequence' in challenge:
+            import urllib.parse
+            sequence_param = urllib.parse.quote(json.dumps(challenge['movement_sequence']))
+            direction_duration = challenge.get('direction_duration', 3.5)
+            challenge_url += f"&sequence={sequence_param}&direction_duration={direction_duration}"
+        
+        response_data = {
+            'success': True,
+            'challenge_url': challenge_url,
+            'session_id': session_id,
+            'challenge_type': challenge['type'],
+            'instruction': challenge['instruction'],
+            'description': challenge['description'],
+            'duration': challenge['duration']
+        }
+        
+        # Include movement sequence in response for head movement challenges
+        if challenge['type'] == 'head_movement' and 'movement_sequence' in challenge:
+            response_data['movement_sequence'] = challenge['movement_sequence']
+            response_data['direction_duration'] = challenge.get('direction_duration', 3.5)
+        
+        logger.info(f"Created simple {challenge['type']} challenge: {session_id}")
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create simple challenge: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create simple challenge: {str(e)}"
+        )
+
+@app.post("/submit-simple-challenge")
+async def submit_simple_challenge(
+    session_id: str = Form(...),
+    challenge_type: str = Form(...),
+    video: UploadFile = File(...),
+    movement_sequence: str = Form(None),  # JSON string of movement sequence
+    third_party_id: str = Form(None)  # Optional 3rd party identifier
+):
+    """
+    Submit video for simple liveness validation.
+    Validates either smile or head movement challenge.
+    """
+    start_time = time.time()
+    
+    try:
+        # Get simple liveness detector
+        detector = get_simple_liveness_detector()
+        if not detector:
+            raise HTTPException(
+                status_code=503,
+                detail="Simple liveness detector not available"
+            )
+        
+        # Validate challenge type - Only head_movement for Gateman
+        if challenge_type != 'head_movement':
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid challenge type. Only 'head_movement' is supported for Gateman Liveness Check"
+            )
+        
+        # Validate video file
+        max_size = 50 * 1024 * 1024  # 50MB
+        if not video.content_type or not video.content_type.startswith('video/'):
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded file must be a video"
+            )
+        
+        content = await video.read()
+        if len(content) > max_size:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Video file too large: {len(content)} bytes (maximum 50MB)"
+            )
+        
+        # Save video to temporary file
+        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_file:
+            temp_video_path = temp_file.name
+            temp_file.write(content)
+        
+        try:
+            # Parse movement sequence if provided
+            parsed_movement_sequence = None
+            if movement_sequence:
+                try:
+                    import json
+                    parsed_movement_sequence = json.loads(movement_sequence)
+                except json.JSONDecodeError:
+                    logger.warning(f"Invalid movement sequence JSON: {movement_sequence}")
+            
+            # Validate challenge
+            logger.info(f"Processing {challenge_type} challenge for session {session_id}")
+            if challenge_type == 'head_movement' and parsed_movement_sequence:
+                logger.info(f"Expected movement sequence: {parsed_movement_sequence}")
+            
+            # Check if face comparison is enabled for this session
+            reference_image = None
+            session_manager = get_session_manager()
+            if session_manager:
+                session_data = session_manager.get_session(session_id)
+                if session_data and session_data.get('enable_face_comparison'):
+                    reference_image = session_data.get('reference_image')
+            
+            validation_result = detector.validate_video_challenge(
+                temp_video_path, 
+                challenge_type, 
+                parsed_movement_sequence,
+                session_id,
+                reference_image
+            )
+            
+            processing_time = time.time() - start_time
+            
+            if validation_result['success']:
+                result = "pass" if validation_result['passed'] else "fail"
+                
+                response_data = {
+                    'success': True,
+                    'session_id': session_id,
+                    'result': result,
+                    'challenge_type': challenge_type,
+                    'processing_time': processing_time,
+                    'details': validation_result
+                }
+                
+                logger.info(f"Simple {challenge_type} challenge {result} for session {session_id}")
+                
+                # Save result to Redis with 1-hour expiration
+                try:
+                    if session_manager:
+                        session_manager.save_liveness_result(
+                            session_id=session_id,
+                            result_data=response_data,
+                            third_party_id=third_party_id
+                        )
+                        logger.info(f"Saved liveness result for session {session_id}")
+                except Exception as save_error:
+                    logger.warning(f"Failed to save result for session {session_id}: {save_error}")
+                
+                # Clean up Redis session data after completion
+                try:
+                    if session_manager:
+                        session_manager.delete_session(session_id)
+                        logger.info(f"Cleaned up session data for {session_id}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup session {session_id}: {cleanup_error}")
+                
+                return response_data
+            else:
+                # Save failed result to Redis as well
+                failed_response_data = {
+                    'success': True,
+                    'session_id': session_id,
+                    'result': 'fail',
+                    'challenge_type': challenge_type,
+                    'processing_time': processing_time,
+                    'details': validation_result
+                }
+                
+                try:
+                    if session_manager:
+                        session_manager.save_liveness_result(
+                            session_id=session_id,
+                            result_data=failed_response_data,
+                            third_party_id=third_party_id
+                        )
+                        logger.info(f"Saved failed liveness result for session {session_id}")
+                except Exception as save_error:
+                    logger.warning(f"Failed to save failed result for session {session_id}: {save_error}")
+                
+                # Clean up Redis session data after failure too
+                try:
+                    if session_manager:
+                        session_manager.delete_session(session_id)
+                        logger.info(f"Cleaned up session data for failed session {session_id}")
+                except Exception as cleanup_error:
+                    logger.warning(f"Failed to cleanup failed session {session_id}: {cleanup_error}")
+                
+                raise HTTPException(
+                    status_code=400,
+                    detail=validation_result.get('error', 'Validation failed')
+                )
+                
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_video_path):
+                os.unlink(temp_video_path)
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to submit simple challenge: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to submit simple challenge: {str(e)}"
+        )
+
+@app.post("/image-liveness-check", response_model=ImageLivenessResponse)
+async def image_liveness_check(request: ImageLivenessRequest):
+    """
+    Perform liveness check on a static image from URL or base64.
+    """
+    start_time = time.time()
+    
+    try:
+        # Get simple liveness detector
+        detector = get_simple_liveness_detector()
+        if not detector:
+            raise HTTPException(
+                status_code=503,
+                detail="Simple liveness detector not available"
+            )
+        
+        logger.info(f"Processing image liveness check for image input")
+        
+        # Perform image liveness check
+        result = detector.perform_image_liveness_check(request.image)
+        
+        processing_time = time.time() - start_time
+        
+        if result['success']:
+            return ImageLivenessResponse(
+                success=True,
+                passed=result['passed'],
+                liveness_score=result['liveness_score'],
+                face_detected=result.get('face_detected', False),
+                processing_time=processing_time,
+                anti_spoofing=result.get('anti_spoofing', {}),
+                error=result.get('error')
+            )
+        else:
+            return ImageLivenessResponse(
+                success=False,
+                passed=False,
+                liveness_score=result.get('liveness_score', 0.0),
+                face_detected=False,
+                processing_time=processing_time,
+                error=result.get('error', 'Image liveness check failed')
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to process image liveness check: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to process image liveness check: {str(e)}"
+        )
+
+@app.post("/face-comparison", response_model=FaceComparisonResponse)
+async def face_comparison(request: FaceComparisonRequest):
+    """
+    Compare two faces from URLs or base64 images.
+    """
+    start_time = time.time()
+    
+    try:
+        # Get simple liveness detector (which has face comparison functionality)
+        detector = get_simple_liveness_detector()
+        if not detector:
+            raise HTTPException(
+                status_code=503,
+                detail="Face comparison service not available"
+            )
+        
+        logger.info(f"Processing face comparison with threshold {request.threshold}")
+        
+        # Perform face comparison
+        result = detector.compare_faces(request.image1, request.image2, request.threshold)
+        
+        processing_time = time.time() - start_time
+        
+        if result['success']:
+            return FaceComparisonResponse(
+                success=True,
+                match=result['match'],
+                similarity_score=result['similarity_score'],
+                threshold=result['threshold'],
+                confidence=result.get('confidence', 'unknown'),
+                processing_time=processing_time
+            )
+        else:
+            return FaceComparisonResponse(
+                success=False,
+                match=False,
+                similarity_score=result.get('similarity_score', 0.0),
+                threshold=request.threshold,
+                confidence='unknown',
+                processing_time=processing_time,
+                error=result.get('error', 'Face comparison failed')
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to perform face comparison: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to perform face comparison: {str(e)}"
+        )
+
+@app.post("/create-challenge-with-comparison")
+async def create_challenge_with_comparison(request: VideoChallengeWithComparisonRequest):
+    """
+    Create a video liveness challenge with optional face comparison.
+    """
+    try:
+        detector = get_simple_liveness_detector()
+        if not detector:
+            raise HTTPException(
+                status_code=503,
+                detail="Simple liveness detector not available"
+            )
+        
+        # Generate challenge
+        challenge = detector.generate_challenge()
+        session_id = f"simple_{int(time.time() * 1000)}"
+        base_url = os.getenv('BASE_URL', 'http://localhost:8000')
+        
+        # Build challenge URL
+        challenge_url = f"{base_url}/static/simple.html?session={session_id}&type={challenge['type']}"
+        
+        if challenge['type'] == 'head_movement' and 'movement_sequence' in challenge:
+            import urllib.parse
+            sequence_param = urllib.parse.quote(json.dumps(challenge['movement_sequence']))
+            direction_duration = challenge.get('direction_duration', 3.5)
+            challenge_url += f"&sequence={sequence_param}&direction_duration={direction_duration}"
+        
+        # Store reference image in session if provided
+        session_manager = get_session_manager()
+        if session_manager and request.reference_image and request.enable_face_comparison:
+            # Create a new session first
+            created_session = session_manager.create_session()
+            # Use the generated session ID instead of our custom one
+            actual_session_id = created_session.session_id
+            
+            # Update session with our custom data
+            session_data = {
+                'challenge_type': challenge['type'],
+                'reference_image': request.reference_image,
+                'enable_face_comparison': True,
+                'third_party_id': request.third_party_id,
+                'created_at': time.time()
+            }
+            session_manager.update_session_data(actual_session_id, session_data)
+            
+            # Use the actual session ID for the response
+            session_id = actual_session_id
+        
+        response_data = {
+            'success': True,
+            'challenge_url': challenge_url,
+            'session_id': session_id,
+            'challenge_type': challenge['type'],
+            'instruction': challenge['instruction'],
+            'description': challenge['description'],
+            'duration': challenge['duration'],
+            'face_comparison_enabled': request.enable_face_comparison and request.reference_image is not None
+        }
+        
+        if challenge['type'] == 'head_movement' and 'movement_sequence' in challenge:
+            response_data['movement_sequence'] = challenge['movement_sequence']
+            response_data['direction_duration'] = challenge.get('direction_duration', 3.5)
+        
+        return response_data
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to create challenge with comparison: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create challenge with comparison: {str(e)}"
+        )
+
+@app.get("/liveness-result/{session_id}", response_model=LivenessResultResponse)
+async def get_liveness_result(
+    session_id: str,
+    third_party_id: str = None
+):
+    """
+    Fetch stored liveness challenge result by session ID.
+    Supports optional 3rd party ID for result segregation.
+    """
+    try:
+        session_manager = get_session_manager()
+        if not session_manager:
+            raise HTTPException(
+                status_code=503,
+                detail="Session manager not available"
+            )
+        
+        logger.info(f"Fetching liveness result for session {session_id}, third_party: {third_party_id}")
+        
+        # Get result from Redis
+        result_data = session_manager.get_liveness_result(session_id, third_party_id)
+        
+        if result_data:
+            return LivenessResultResponse(
+                success=True,
+                found=True,
+                session_id=result_data.get('session_id'),
+                third_party_id=result_data.get('third_party_id'),
+                result=result_data.get('result'),
+                passed=result_data.get('result') == 'pass',
+                challenge_type=result_data.get('challenge_type'),
+                processing_time=result_data.get('processing_time'),
+                stored_at=result_data.get('stored_at'),
+                expires_at=result_data.get('expires_at'),
+                details=result_data.get('details')
+            )
+        else:
+            return LivenessResultResponse(
+                success=True,
+                found=False,
+                session_id=session_id,
+                third_party_id=third_party_id,
+                error="No result found for the provided session ID"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to fetch liveness result: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch liveness result: {str(e)}"
+        )
+
+# Old complex liveness endpoint removed - using simple challenges now
+
 @app.get("/")
 async def root():
     """Root endpoint with API information."""
     return {
-        "message": "Face Recognition API",
-        "version": "1.0.0",
+        "message": "Gateman Liveness Check API",
+        "version": "2.0.0",
+        "description": "Enhanced liveness detection with face comparison and anti-spoofing",
         "endpoints": {
             "health": "/health",
-            "match": "/match",
-            "docs": "/docs"
-        }
+            "face_matching": "/match",
+            "image_liveness": "/image-liveness-check",
+            "face_comparison": "/face-comparison",
+            "simple_challenge": "/create-simple-challenge",
+            "challenge_with_comparison": "/create-challenge-with-comparison",
+            "submit_challenge": "/submit-simple-challenge",
+            "get_result": "/liveness-result/{session_id}",
+            "docs": "/docs",
+            "frontend": "/static/index.html"
+        },
+        "features": [
+            "Static image liveness detection",
+            "Face comparison (URL/base64 support)",
+            "Video liveness challenges",
+            "Advanced anti-spoofing detection",
+            "Head movement validation",
+            "Redis session management",
+            "Liveness result storage (1-hour expiration)",
+            "3rd party integration support",
+            "Professional UI with white background",
+            "Automatic session cleanup"
+        ]
     }
 
 @app.exception_handler(Exception)

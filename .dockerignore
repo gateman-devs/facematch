@@ -1,0 +1,53 @@
+# Exclude large model files (they're mounted as volumes anyway)
+models/
+*.onnx
+*.pb
+
+# Exclude logs and temporary files
+logs/
+*.log
+*.tmp
+
+# Exclude Git and development files
+.git/
+.gitignore
+.github/
+README.md
+*.md
+
+# Exclude test files
+test_*.py
+*test*.py
+
+# Exclude development and build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Exclude editor and IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Exclude OS specific files
+.DS_Store
+Thumbs.db
+
+# Exclude docker files that aren't needed
+Dockerfile.*
+docker-compose*.yml
+start.sh
+stop.sh
+
+# Exclude other large directories that might accumulate
+node_modules/
+.npm/
+vendor/ 

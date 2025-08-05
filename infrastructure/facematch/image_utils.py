@@ -13,6 +13,9 @@ import numpy as np
 import cv2
 import aiohttp
 from PIL import Image
+import requests
+import tempfile
+import os
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -389,30 +392,214 @@ def validate_image_input(source: str) -> Dict:
                 'source_type': 'base64'
             }
 
-def resize_image_if_needed(image: np.ndarray, max_dimension: int = 1024) -> np.ndarray:
-    """
-    Resize image if it's too large while maintaining aspect ratio.
+class ImageProcessor:
+    """Utility class for processing images from various sources (URL, base64, file)"""
     
-    Args:
-        image: Input image
-        max_dimension: Maximum width or height
+    def __init__(self):
+        self.max_image_size = 10 * 1024 * 1024  # 10MB
+        self.supported_formats = ['.jpg', '.jpeg', '.png', '.bmp', '.tiff']
         
-    Returns:
-        Resized image
-    """
-    height, width = image.shape[:2]
+    def process_image_input(self, image_input: str) -> Optional[np.ndarray]:
+        """
+        Process image from URL or base64 string and return OpenCV image array.
+        
+        Args:
+            image_input: URL string or base64 encoded image
+            
+        Returns:
+            OpenCV image array (BGR format) or None if failed
+        """
+        try:
+            if self._is_url(image_input):
+                return self._load_image_from_url(image_input)
+            elif self._is_base64(image_input):
+                return self._load_image_from_base64(image_input)
+            else:
+                logger.error("Invalid image input: must be URL or base64")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error processing image input: {e}")
+            return None
     
-    if max(height, width) <= max_dimension:
-        return image
+    def _is_url(self, text: str) -> bool:
+        """Check if text is a valid URL"""
+        return text.startswith(('http://', 'https://'))
     
-    # Calculate scale factor
-    scale = max_dimension / max(height, width)
-    new_width = int(width * scale)
-    new_height = int(height * scale)
+    def _is_base64(self, text: str) -> bool:
+        """Check if text is a valid base64 string"""
+        try:
+            # Remove data URL prefix if present
+            if text.startswith('data:image'):
+                text = text.split(',')[1]
+            
+            # Try to decode base64
+            decoded = base64.b64decode(text, validate=True)
+            return len(decoded) > 0
+        except Exception:
+            return False
     
-    # Resize image
-    resized = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+    def _load_image_from_url(self, url: str) -> Optional[np.ndarray]:
+        """Download and load image from URL"""
+        try:
+            logger.info(f"Downloading image from URL: {url[:100]}...")
+            
+            # Set headers to avoid blocking
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=30, stream=True)
+            response.raise_for_status()
+            
+            # Check content type
+            content_type = response.headers.get('content-type', '')
+            if not content_type.startswith('image/'):
+                logger.error(f"Invalid content type: {content_type}")
+                return None
+            
+            # Check file size
+            content_length = response.headers.get('content-length')
+            if content_length and int(content_length) > self.max_image_size:
+                logger.error(f"Image too large: {content_length} bytes")
+                return None
+            
+            # Read image data
+            image_data = b''
+            for chunk in response.iter_content(chunk_size=8192):
+                image_data += chunk
+                if len(image_data) > self.max_image_size:
+                    logger.error("Image too large during download")
+                    return None
+            
+            # Convert to OpenCV format
+            return self._bytes_to_opencv(image_data)
+            
+        except requests.RequestException as e:
+            logger.error(f"Error downloading image: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error processing downloaded image: {e}")
+            return None
     
-    logger.info(f"Resized image from {width}x{height} to {new_width}x{new_height}")
+    def _load_image_from_base64(self, base64_string: str) -> Optional[np.ndarray]:
+        """Load image from base64 string"""
+        try:
+            # Remove data URL prefix if present
+            if base64_string.startswith('data:image'):
+                base64_string = base64_string.split(',')[1]
+            
+            # Decode base64
+            image_data = base64.b64decode(base64_string)
+            
+            # Check size
+            if len(image_data) > self.max_image_size:
+                logger.error(f"Base64 image too large: {len(image_data)} bytes")
+                return None
+            
+            # Convert to OpenCV format
+            return self._bytes_to_opencv(image_data)
+            
+        except Exception as e:
+            logger.error(f"Error processing base64 image: {e}")
+            return None
     
-    return resized 
+    def _bytes_to_opencv(self, image_bytes: bytes) -> Optional[np.ndarray]:
+        """Convert image bytes to OpenCV format"""
+        try:
+            # Use PIL to handle various formats
+            pil_image = Image.open(io.BytesIO(image_bytes))
+            
+            # Convert to RGB if needed
+            if pil_image.mode != 'RGB':
+                pil_image = pil_image.convert('RGB')
+            
+            # Convert PIL to OpenCV (RGB to BGR)
+            opencv_image = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
+            
+            # Validate image
+            if opencv_image.size == 0:
+                logger.error("Empty image after conversion")
+                return None
+            
+            logger.info(f"Successfully loaded image: {opencv_image.shape}")
+            return opencv_image
+            
+        except Exception as e:
+            logger.error(f"Error converting bytes to OpenCV: {e}")
+            return None
+    
+    def validate_image_for_face_detection(self, image: np.ndarray) -> Tuple[bool, str]:
+        """
+        Validate image for face detection requirements.
+        
+        Returns:
+            (is_valid, error_message)
+        """
+        try:
+            if image is None or image.size == 0:
+                return False, "Invalid or empty image"
+            
+            height, width = image.shape[:2]
+            
+            # Check minimum dimensions
+            if width < 100 or height < 100:
+                return False, f"Image too small: {width}x{height} (minimum 100x100)"
+            
+            # Check maximum dimensions
+            if width > 4000 or height > 4000:
+                return False, f"Image too large: {width}x{height} (maximum 4000x4000)"
+            
+            # Check aspect ratio (not too extreme)
+            aspect_ratio = width / height
+            if aspect_ratio < 0.2 or aspect_ratio > 5.0:
+                return False, f"Extreme aspect ratio: {aspect_ratio:.2f}"
+            
+            return True, "Image validation passed"
+            
+        except Exception as e:
+            return False, f"Error validating image: {e}"
+    
+    def save_temp_image(self, image: np.ndarray, prefix: str = "temp_image") -> str:
+        """Save image to temporary file and return path"""
+        try:
+            with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False, prefix=prefix) as temp_file:
+                cv2.imwrite(temp_file.name, image)
+                return temp_file.name
+        except Exception as e:
+            logger.error(f"Error saving temporary image: {e}")
+            raise
+    
+    def resize_image_if_needed(self, image: np.ndarray, max_dimension: int = 1024) -> np.ndarray:
+        """Resize image if it's too large, maintaining aspect ratio"""
+        try:
+            height, width = image.shape[:2]
+            
+            if max(width, height) <= max_dimension:
+                return image
+            
+            # Calculate new dimensions
+            if width > height:
+                new_width = max_dimension
+                new_height = int(height * (max_dimension / width))
+            else:
+                new_height = max_dimension
+                new_width = int(width * (max_dimension / height))
+            
+            resized = cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+            logger.info(f"Resized image from {width}x{height} to {new_width}x{new_height}")
+            
+            return resized
+            
+        except Exception as e:
+            logger.error(f"Error resizing image: {e}")
+            return image
+
+
+# Global instance
+image_processor = ImageProcessor()
+
+
+def get_image_processor() -> ImageProcessor:
+    """Get the global image processor instance"""
+    return image_processor 

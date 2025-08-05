@@ -69,7 +69,7 @@ COPY download_models.sh .
 COPY startup.sh .
 
 # Create models directory
-RUN mkdir -p models && chown -R facematch:facematch /app
+        RUN mkdir -p models faces logs static && chown -R facematch:facematch /app
 
 # Make scripts executable
 RUN chmod +x download_models.sh startup.sh
