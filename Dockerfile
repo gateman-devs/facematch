@@ -1,7 +1,7 @@
 # Face Recognition API Dockerfile
 # Multi-stage build for optimized production image
 
-FROM python:3.10-slim as builder
+FROM python:3.10-slim AS builder
 
 # Set working directory
 WORKDIR /app
@@ -65,7 +65,7 @@ RUN apt-get update && apt-get install -y \
     wget \
     libjpeg62-turbo \
     libpng16-16 \
-    libtiff5 \
+    libtiff6 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
