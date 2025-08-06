@@ -17,7 +17,7 @@ import numpy as np
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
+
 from pydantic import BaseModel, Field, field_validator
 
 from .face_detection import FaceDetector, validate_image_quality
@@ -364,8 +364,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Mount static files for frontend
-app.mount("/static", StaticFiles(directory="static"), name="static")
+
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check(verbose: bool = False):
@@ -1179,8 +1178,7 @@ async def root():
             "challenge_with_comparison": "/create-challenge-with-comparison",
             "submit_challenge": "/submit-simple-challenge",
             "get_result": "/liveness-result/{session_id}",
-            "docs": "/docs",
-            "frontend": "/static/index.html"
+            "docs": "/docs"
         },
         "features": [
             "Static image liveness detection",
@@ -1191,7 +1189,6 @@ async def root():
             "Redis session management",
             "Liveness result storage (1-hour expiration)",
             "3rd party integration support",
-            "Professional UI with white background",
             "Automatic session cleanup"
         ]
     }
