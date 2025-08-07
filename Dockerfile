@@ -39,6 +39,10 @@ RUN pip install --no-cache-dir dlib
 COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
+# Download models during build stage
+COPY download_models.sh .
+RUN chmod +x download_models.sh && ./download_models.sh
+
 # Production stage
 FROM python:3.10-slim
 
@@ -83,13 +87,12 @@ ENV PATH=/home/facematch/.local/bin:$PATH
 # Copy application code
 COPY infrastructure/ infrastructure/
 COPY requirements.txt .
-COPY download_models.sh .
+
+# Copy models from builder stage
+COPY --from=builder /app/models/ models/
 
 # Create directories
-RUN mkdir -p models faces logs static && chown -R facematch:facematch /app
-
-# Make scripts executable
-RUN chmod +x download_models.sh
+RUN mkdir -p faces logs static && chown -R facematch:facematch /app
 
 # Switch to non-root user
 USER facematch
