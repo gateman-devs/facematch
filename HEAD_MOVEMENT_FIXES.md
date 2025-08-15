@@ -52,25 +52,27 @@ else:
 
 Added logic to analyze movement consistency over time and boost confidence for consistent movements.
 
-### 5. Relaxed Validation Thresholds
+### 5. Strict Perfect Match Validation
 **File**: `infrastructure/facematch/simple_liveness.py`
 **Line**: 1150
 
 **Before**: `passed = overall_accuracy >= 0.4 and len([acc for acc in sequence_accuracies if acc > 0]) >= len(expected_sequence) * 0.4`
-**After**: `passed = overall_accuracy >= 0.3 and len([acc for acc in sequence_accuracies if acc > 0]) >= len(expected_sequence) * 0.3`
+**After**: `passed = correct_segments == len(expected_sequence)`
 
-### 6. Added Fallback Validation
+**Additional**: Requires ALL directions to match perfectly - any single mismatch causes failure.
+
+### 6. Removed Fallback Validation
 **File**: `infrastructure/facematch/simple_liveness.py`
-**Lines**: 1155-1160
+**Lines**: 1160-1170
 
-Added fallback mechanism that accepts movements with good overall range even if sequence validation fails.
+Removed fallback validation entirely - only perfect sequence matching is accepted.
 
-### 7. Enhanced Partial Credit System
+### 7. Removed Partial Credit System
 **File**: `infrastructure/facematch/simple_liveness.py`
 **Lines**: 1140-1145
 
 **Before**: No partial credit for wrong directions
-**After**: 50% credit for confident wrong detections
+**After**: No partial credit - only perfect matches count
 
 ### 8. Improved Face Detection Preprocessing
 **File**: `infrastructure/facematch/simple_liveness.py`
@@ -100,8 +102,8 @@ Added detailed logging for:
 These fixes should significantly improve head movement liveness detection accuracy by:
 
 1. **Correcting Direction Detection**: Proper handling of camera mirror effect
-2. **Increasing Sensitivity**: Lower thresholds for movement detection
-3. **Improving Robustness**: Fallback mechanisms for edge cases
+2. **Balanced Sensitivity**: Appropriate thresholds for movement detection
+3. **Perfect Match Validation**: Only accepts sequences where ALL directions match exactly
 4. **Better Debugging**: Comprehensive logging for troubleshooting
 5. **Enhanced Performance**: Better face detection preprocessing
 
@@ -109,9 +111,10 @@ These fixes should significantly improve head movement liveness detection accura
 
 The fixes have been tested with synthetic data and show:
 - 100% accuracy for individual movement directions
-- Proper fallback validation when sequence matching fails
+- Perfect match validation (passes only when ALL directions match exactly)
 - Correct handling of camera mirror effects
-- Improved confidence scoring
+- No fallback validation (only perfect sequences accepted)
+- Comprehensive logging for debugging
 
 ## Deployment
 

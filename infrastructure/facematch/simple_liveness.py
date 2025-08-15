@@ -1182,29 +1182,28 @@ class SimpleLivenessDetector:
             # Log detection details for debugging
             logger.info(f"Segment {i}: Expected={expected_direction}, Detected={detected_direction}, Confidence={confidence:.3f}, Frames={len(segment_positions)}")
             
-                    # Calculate accuracy for this segment
-        if detected_direction == expected_direction:
-            sequence_accuracies.append(confidence)
-        else:
-            # Give partial credit for close movements or high confidence detections
-            if detected_direction != 'none' and confidence > 0.3:
-                sequence_accuracies.append(confidence * 0.5)  # 50% credit for confident wrong detection
+            # Calculate accuracy for this segment (no partial credit - perfect match only)
+            if detected_direction == expected_direction:
+                sequence_accuracies.append(confidence)
             else:
                 sequence_accuracies.append(0.0)
         
         # Calculate overall accuracy
         overall_accuracy = float(np.mean(sequence_accuracies)) if sequence_accuracies else 0.0
         
-        # Pass if accuracy is above threshold (more lenient for better detection)
-        passed = overall_accuracy >= 0.3 and len([acc for acc in sequence_accuracies if acc > 0]) >= len(expected_sequence) * 0.3
+        # Strict validation: ALL directions must match perfectly
+        correct_segments = sum(1 for i, (expected, detected) in enumerate(zip(expected_sequence, detected_sequence)) if expected == detected)
+        passed = correct_segments == len(expected_sequence)
         
-        # Fallback: If we have good movement but strict validation failed, be more lenient
-        if not passed and len(nose_positions_with_time) >= 20:
-            # Check if there's significant movement overall
+        if not passed:
+            logger.info(f"Validation failed: {correct_segments}/{len(expected_sequence)} segments correctly detected, need ALL to match")
+            logger.info(f"Expected: {expected_sequence}")
+            logger.info(f"Detected: {detected_sequence}")
+        
+        # No fallback validation - strict sequence matching only
+        if not passed:
             movement_analysis = self._analyze_basic_head_movement(nose_positions_with_time)
-            if movement_analysis['horizontal_range'] > 20 or movement_analysis['vertical_range'] > 20:
-                logger.info(f"Fallback validation: Good overall movement detected, accepting despite sequence mismatch")
-                passed = True
+            logger.info(f"Strict validation: movement=({movement_analysis['horizontal_range']:.1f}h, {movement_analysis['vertical_range']:.1f}v), accuracy={overall_accuracy:.3f}")
         
         # Log validation results for debugging
         logger.info(f"Movement validation: Overall accuracy={overall_accuracy:.3f}, Passed={passed}, Segment accuracies={[f'{acc:.3f}' for acc in sequence_accuracies]}")
