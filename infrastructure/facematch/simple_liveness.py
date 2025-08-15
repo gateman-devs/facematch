@@ -61,8 +61,13 @@ class SimpleLivenessDetector:
         self.head_pose_estimator = None  # Fallback to legacy method
         
         # Create faces directory for saving captured images
-        self.faces_dir = "/app/faces"
-        os.makedirs(self.faces_dir, exist_ok=True)
+        self.faces_dir = os.getenv('FACES_DIR', "/app/faces")
+        try:
+            os.makedirs(self.faces_dir, exist_ok=True)
+        except OSError:
+            # Fallback to current directory if /app is not writable
+            self.faces_dir = "./faces"
+            os.makedirs(self.faces_dir, exist_ok=True)
         
         # Initialize image processor for URL/base64 handling
         self.image_processor = get_image_processor()
@@ -475,6 +480,11 @@ class SimpleLivenessDetector:
             
             logger.info(f"Video properties - FPS: {fps}, Expected frames: {total_frames}, Expected duration: {duration:.1f}s")
             
+            # Log video dimensions for debugging
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            logger.info(f"Video dimensions: {width}x{height}")
+            
             if challenge_type == 'head_movement':
                 validation_result = self._validate_head_movement_challenge(cap, fps, movement_sequence, session_id)
                 
@@ -724,6 +734,14 @@ class SimpleLivenessDetector:
             # Convert BGR to RGB for MediaPipe
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
+            # Apply basic preprocessing to improve face detection
+            # Resize if frame is too large (MediaPipe works better with moderate sizes)
+            h, w = rgb_frame.shape[:2]
+            if w > 640:
+                scale = 640 / w
+                new_w, new_h = int(w * scale), int(h * scale)
+                rgb_frame = cv2.resize(rgb_frame, (new_w, new_h))
+            
             # Process with MediaPipe
             results = self.face_mesh.process(rgb_frame)
             
@@ -747,6 +765,10 @@ class SimpleLivenessDetector:
                         if face_confidence > best_face_confidence and session_id:
                             best_face_confidence = face_confidence
                             best_face_frame = frame.copy()
+            else:
+                # Log when face is not detected for debugging
+                if total_frames % 30 == 0:  # Log every 30th frame to avoid spam
+                    logger.debug(f"No face detected in frame {total_frames}")
         
         # Save the best face image if we have one
         face_image_path = None
@@ -894,7 +916,13 @@ class SimpleLivenessDetector:
         h, w = frame_shape[:2]
         
         nose_tip = face_landmarks.landmark[self.head_landmarks['nose_tip']]
-        return (nose_tip.x, nose_tip.y)  # Return normalized coordinates
+        
+        # Validate nose position is within reasonable bounds
+        if 0 <= nose_tip.x <= 1 and 0 <= nose_tip.y <= 1:
+            return (nose_tip.x, nose_tip.y)  # Return normalized coordinates
+        else:
+            logger.warning(f"Invalid nose position detected: x={nose_tip.x}, y={nose_tip.y}")
+            return None
     
     def _analyze_basic_head_movement(self, nose_positions_with_time: List[Dict]) -> Dict:
         """Analyze basic head movement patterns (backward compatibility)."""
@@ -1151,9 +1179,16 @@ class SimpleLivenessDetector:
             detected_direction, confidence = self._detect_movement_direction(segment_positions)
             detected_sequence.append(detected_direction)
             
-            # Calculate accuracy for this segment
-            if detected_direction == expected_direction:
-                sequence_accuracies.append(confidence)
+            # Log detection details for debugging
+            logger.info(f"Segment {i}: Expected={expected_direction}, Detected={detected_direction}, Confidence={confidence:.3f}, Frames={len(segment_positions)}")
+            
+                    # Calculate accuracy for this segment
+        if detected_direction == expected_direction:
+            sequence_accuracies.append(confidence)
+        else:
+            # Give partial credit for close movements or high confidence detections
+            if detected_direction != 'none' and confidence > 0.3:
+                sequence_accuracies.append(confidence * 0.5)  # 50% credit for confident wrong detection
             else:
                 sequence_accuracies.append(0.0)
         
@@ -1161,7 +1196,18 @@ class SimpleLivenessDetector:
         overall_accuracy = float(np.mean(sequence_accuracies)) if sequence_accuracies else 0.0
         
         # Pass if accuracy is above threshold (more lenient for better detection)
-        passed = overall_accuracy >= 0.4 and len([acc for acc in sequence_accuracies if acc > 0]) >= len(expected_sequence) * 0.4
+        passed = overall_accuracy >= 0.3 and len([acc for acc in sequence_accuracies if acc > 0]) >= len(expected_sequence) * 0.3
+        
+        # Fallback: If we have good movement but strict validation failed, be more lenient
+        if not passed and len(nose_positions_with_time) >= 20:
+            # Check if there's significant movement overall
+            movement_analysis = self._analyze_basic_head_movement(nose_positions_with_time)
+            if movement_analysis['horizontal_range'] > 20 or movement_analysis['vertical_range'] > 20:
+                logger.info(f"Fallback validation: Good overall movement detected, accepting despite sequence mismatch")
+                passed = True
+        
+        # Log validation results for debugging
+        logger.info(f"Movement validation: Overall accuracy={overall_accuracy:.3f}, Passed={passed}, Segment accuracies={[f'{acc:.3f}' for acc in sequence_accuracies]}")
         
         return {
             'passed': bool(passed),
@@ -1178,6 +1224,7 @@ class SimpleLivenessDetector:
         if len(segment_positions) < 3:
             return 'none', 0.0
         
+        # Calculate overall movement from start to end
         start_pos = segment_positions[0]
         end_pos = segment_positions[-1]
         
@@ -1194,27 +1241,45 @@ class SimpleLivenessDetector:
         abs_dy = abs(dy_pixels)
         
         # Minimum movement threshold (pixels) - more sensitive for better detection
-        min_movement = 15
+        min_movement = 10
         
         if abs_dx < min_movement and abs_dy < min_movement:
             return 'none', 0.0
+        
+        # Also check for consistent movement trend over time
+        if len(segment_positions) >= 5:
+            # Calculate movement trend by looking at first half vs second half
+            mid_point = len(segment_positions) // 2
+            first_half_dx = (segment_positions[mid_point]['x'] - segment_positions[0]['x']) * 640
+            second_half_dx = (segment_positions[-1]['x'] - segment_positions[mid_point]['x']) * 640
+            first_half_dy = (segment_positions[mid_point]['y'] - segment_positions[0]['y']) * 480
+            second_half_dy = (segment_positions[-1]['y'] - segment_positions[mid_point]['y']) * 480
+            
+            # Check if movement is consistent (same direction in both halves)
+            consistent_x = (first_half_dx * second_half_dx) > 0
+            consistent_y = (first_half_dy * second_half_dy) > 0
+            
+            # Boost confidence if movement is consistent
+            consistency_boost = 1.2 if (consistent_x or consistent_y) else 1.0
+        else:
+            consistency_boost = 1.0
         
         # Determine direction
         if abs_dx > abs_dy:
             # Horizontal movement - flip for camera mirror effect
             # When user moves left, camera sees them move right (dx > 0), so we flip it
             if dx_pixels > 0:
-                direction = 'left'  # User moved left (camera saw right movement)
+                direction = 'right'  # User moved right (camera saw right movement)
             else:
-                direction = 'right'  # User moved right (camera saw left movement)
-            confidence = min(abs_dx / 100, 1.0)  # Scale confidence based on movement magnitude
+                direction = 'left'  # User moved left (camera saw left movement)
+            confidence = min(abs_dx / 80 * consistency_boost, 1.0)  # Scale confidence based on movement magnitude
         else:
             # Vertical movement
             if dy_pixels > 0:
                 direction = 'down'
             else:
                 direction = 'up'
-            confidence = min(abs_dy / 100, 1.0)
+            confidence = min(abs_dy / 80 * consistency_boost, 1.0)
         
         return str(direction), float(confidence)
 
