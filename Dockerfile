@@ -52,7 +52,8 @@ ENV PYTHONUNBUFFERED=1 \
     SIMILARITY_THRESHOLD=0.6 \
     MAX_IMAGE_SIZE=10485760 \
     REQUEST_TIMEOUT=30 \
-    MAX_IMAGE_DIMENSION=1024
+    MAX_IMAGE_DIMENSION=1024 \
+    SESSION_TTL=300
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \

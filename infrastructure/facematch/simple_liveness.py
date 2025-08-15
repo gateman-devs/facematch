@@ -529,8 +529,8 @@ class SimpleLivenessDetector:
             if frame is None or frame.size == 0:
                 continue
             
-            # Process every 3rd frame for performance
-            if total_frames % 3 != 0:
+            # Process every 2nd frame for better movement detection
+            if total_frames % 2 != 0:
                 continue
             
             # Convert BGR to RGB
@@ -714,8 +714,8 @@ class SimpleLivenessDetector:
             if frame is None or frame.size == 0:
                 continue
             
-            # Process every 3rd frame for performance
-            if total_frames % 3 != 0:
+            # Process every 2nd frame for better movement detection
+            if total_frames % 2 != 0:
                 continue
             
             # Calculate timestamp
@@ -766,10 +766,10 @@ class SimpleLivenessDetector:
             for key in anti_spoofing_scores[0].keys():
                 avg_anti_spoofing[key] = float(np.mean([score[key] for score in anti_spoofing_scores]))
         
-        # Determine if anti-spoofing validation passed
-        anti_spoof_passed = avg_anti_spoofing.get('overall_liveness_score', 0) >= 0.3
+        # Determine if anti-spoofing validation passed - more lenient threshold
+        anti_spoof_passed = avg_anti_spoofing.get('overall_liveness_score', 0) >= 0.2
         
-        if len(nose_positions_with_time) < 10:
+        if len(nose_positions_with_time) < 5:
             return {
                 'success': True,
                 'passed': False,
@@ -787,8 +787,9 @@ class SimpleLivenessDetector:
         # If no sequence provided, fall back to basic movement validation
         if not movement_sequence:
             movement_analysis = self._analyze_basic_head_movement(nose_positions_with_time)
-            movement_passed = (movement_analysis['horizontal_range'] > 50 and 
-                             movement_analysis['movement_changes'] >= 2)
+            # More lenient thresholds for better head movement detection
+            movement_passed = (movement_analysis['horizontal_range'] > 30 and 
+                             movement_analysis['movement_changes'] >= 1)
             
             # Overall validation requires both movement and anti-spoofing to pass
             overall_passed = movement_passed and anti_spoof_passed
@@ -1159,8 +1160,8 @@ class SimpleLivenessDetector:
         # Calculate overall accuracy
         overall_accuracy = float(np.mean(sequence_accuracies)) if sequence_accuracies else 0.0
         
-        # Pass if accuracy is above threshold (lowered to 50% for better detection)
-        passed = overall_accuracy >= 0.5 and len([acc for acc in sequence_accuracies if acc > 0]) >= len(expected_sequence) * 0.5
+        # Pass if accuracy is above threshold (more lenient for better detection)
+        passed = overall_accuracy >= 0.4 and len([acc for acc in sequence_accuracies if acc > 0]) >= len(expected_sequence) * 0.4
         
         return {
             'passed': bool(passed),
@@ -1192,8 +1193,8 @@ class SimpleLivenessDetector:
         abs_dx = abs(dx_pixels)
         abs_dy = abs(dy_pixels)
         
-        # Minimum movement threshold (pixels)
-        min_movement = 20
+        # Minimum movement threshold (pixels) - more sensitive for better detection
+        min_movement = 15
         
         if abs_dx < min_movement and abs_dy < min_movement:
             return 'none', 0.0
