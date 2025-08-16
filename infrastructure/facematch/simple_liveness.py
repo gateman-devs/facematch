@@ -1268,9 +1268,9 @@ class SimpleLivenessDetector:
             # Horizontal movement - flip for camera mirror effect
             # When user moves left, camera sees them move right (dx > 0), so we flip it
             if dx_pixels > 0:
-                direction = 'right'  # User moved right (camera saw right movement)
+                direction = 'left'  # User moved left (camera saw right movement)
             else:
-                direction = 'left'  # User moved left (camera saw left movement)
+                direction = 'right'  # User moved right (camera saw left movement)
             confidence = min(abs_dx / 80 * consistency_boost, 1.0)  # Scale confidence based on movement magnitude
         else:
             # Vertical movement
