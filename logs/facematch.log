@@ -1,0 +1,250 @@
+2025-08-16 05:51:49,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_000, challenge_type: head_movement, file_size: 6607799
+2025-08-16 05:51:50,286 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_000, duration: 0.978s, size: 6607799 bytes
+2025-08-16 05:51:50,307 - INFO - VIDEO_PROCESSING_START - session_id: test_session_000, challenge_type: head_movement
+2025-08-16 05:51:55,856 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_000, duration: 5.549s, success: True
+2025-08-16 05:51:55,867 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_000, result: pass, total_time: 6.546s, processing_time: 5.549s, video_receive_time: 0.978s, file_save_time: 0.010s
+2025-08-16 05:54:22,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_001, challenge_type: head_movement, file_size: 9579175
+2025-08-16 05:54:23,818 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_001, duration: 1.510s, size: 9579175 bytes
+2025-08-16 05:54:23,918 - INFO - VIDEO_PROCESSING_START - session_id: test_session_001, challenge_type: head_movement
+2025-08-16 05:54:25,607 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_001, duration: 1.689s, success: True
+2025-08-16 05:54:25,683 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_001, result: pass, total_time: 3.232s, processing_time: 1.689s, video_receive_time: 1.510s, file_save_time: 0.010s
+2025-08-16 05:56:19,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_002, challenge_type: head_movement, file_size: 1852680
+2025-08-16 05:56:20,907 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_002, duration: 1.599s, size: 1852680 bytes
+2025-08-16 05:56:20,937 - INFO - VIDEO_PROCESSING_START - session_id: test_session_002, challenge_type: head_movement
+2025-08-16 05:56:28,596 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_002, duration: 7.659s, success: True
+2025-08-16 05:56:28,618 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_002, result: pass, total_time: 9.335s, processing_time: 7.659s, video_receive_time: 1.599s, file_save_time: 0.041s
+2025-08-16 05:58:25,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_003, challenge_type: head_movement, file_size: 3964650
+2025-08-16 05:58:26,172 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_003, duration: 0.864s, size: 3964650 bytes
+2025-08-16 05:58:26,239 - INFO - VIDEO_PROCESSING_START - session_id: test_session_003, challenge_type: head_movement
+2025-08-16 05:58:28,276 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_003, duration: 2.037s, success: True
+2025-08-16 05:58:28,336 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_003, result: pass, total_time: 2.940s, processing_time: 2.037s, video_receive_time: 0.864s, file_save_time: 0.021s
+2025-08-16 06:00:28,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_004, challenge_type: head_movement, file_size: 5026147
+2025-08-16 06:00:29,428 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_004, duration: 1.120s, size: 5026147 bytes
+2025-08-16 06:00:29,455 - INFO - VIDEO_PROCESSING_START - session_id: test_session_004, challenge_type: head_movement
+2025-08-16 06:00:32,517 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_004, duration: 3.062s, success: True
+2025-08-16 06:00:32,557 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_004, result: pass, total_time: 4.230s, processing_time: 3.062s, video_receive_time: 1.120s, file_save_time: 0.050s
+2025-08-16 06:01:58,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_005, challenge_type: head_movement, file_size: 4409636
+2025-08-16 06:02:00,156 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_005, duration: 1.847s, size: 4409636 bytes
+2025-08-16 06:02:00,240 - INFO - VIDEO_PROCESSING_START - session_id: test_session_005, challenge_type: head_movement
+2025-08-16 06:02:04,631 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_005, duration: 4.392s, success: True
+2025-08-16 06:02:04,729 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_005, result: pass, total_time: 6.294s, processing_time: 4.392s, video_receive_time: 1.847s, file_save_time: 0.012s
+2025-08-16 06:03:58,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_006, challenge_type: head_movement, file_size: 4224131
+2025-08-16 06:04:00,247 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_006, duration: 1.938s, size: 4224131 bytes
+2025-08-16 06:04:00,270 - INFO - VIDEO_PROCESSING_START - session_id: test_session_006, challenge_type: head_movement
+2025-08-16 06:04:04,695 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_006, duration: 4.425s, success: True
+2025-08-16 06:04:04,732 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_006, result: pass, total_time: 6.461s, processing_time: 4.425s, video_receive_time: 1.938s, file_save_time: 0.032s
+2025-08-16 06:05:46,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_007, challenge_type: head_movement, file_size: 3117214
+2025-08-16 06:05:46,978 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_007, duration: 0.669s, size: 3117214 bytes
+2025-08-16 06:05:47,037 - INFO - VIDEO_PROCESSING_START - session_id: test_session_007, challenge_type: head_movement
+2025-08-16 06:05:49,847 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_007, duration: 2.809s, success: True
+2025-08-16 06:05:49,919 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_007, result: pass, total_time: 3.548s, processing_time: 2.809s, video_receive_time: 0.669s, file_save_time: 0.016s
+2025-08-16 06:07:45,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_008, challenge_type: head_movement, file_size: 5108354
+2025-08-16 06:07:47,162 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_008, duration: 1.853s, size: 5108354 bytes
+2025-08-16 06:07:47,186 - INFO - VIDEO_PROCESSING_START - session_id: test_session_008, challenge_type: head_movement
+2025-08-16 06:07:53,635 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_008, duration: 6.448s, success: True
+2025-08-16 06:07:53,691 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_008, result: pass, total_time: 8.351s, processing_time: 6.448s, video_receive_time: 1.853s, file_save_time: 0.035s
+2025-08-16 06:10:27,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_009, challenge_type: head_movement, file_size: 4674110
+2025-08-16 06:10:28,677 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_009, duration: 1.369s, size: 4674110 bytes
+2025-08-16 06:10:28,745 - INFO - VIDEO_PROCESSING_START - session_id: test_session_009, challenge_type: head_movement
+2025-08-16 06:10:36,016 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_009, duration: 7.271s, success: True
+2025-08-16 06:10:36,081 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_009, result: pass, total_time: 8.717s, processing_time: 7.271s, video_receive_time: 1.369s, file_save_time: 0.036s
+2025-08-16 06:12:32,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_010, challenge_type: head_movement, file_size: 8424376
+2025-08-16 06:12:32,977 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_010, duration: 0.669s, size: 8424376 bytes
+2025-08-16 06:12:33,010 - INFO - VIDEO_PROCESSING_START - session_id: test_session_010, challenge_type: head_movement
+2025-08-16 06:12:39,026 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_010, duration: 6.016s, success: False
+2025-08-16 06:12:39,049 - WARNING - VIDEO_LIVENESS_FAILED - session_id: test_session_010, total_time: 6.733s, processing_time: 6.016s, error: Video processing failed
+2025-08-16 06:13:44,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_011, challenge_type: head_movement, file_size: 6184251
+2025-08-16 06:13:45,040 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_011, duration: 0.731s, size: 6184251 bytes
+2025-08-16 06:13:45,128 - INFO - VIDEO_PROCESSING_START - session_id: test_session_011, challenge_type: head_movement
+2025-08-16 06:13:50,873 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_011, duration: 5.745s, success: True
+2025-08-16 06:13:50,949 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_011, result: pass, total_time: 6.573s, processing_time: 5.745s, video_receive_time: 0.731s, file_save_time: 0.033s
+2025-08-16 06:16:20,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_012, challenge_type: head_movement, file_size: 5301343
+2025-08-16 06:16:20,743 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_012, duration: 0.435s, size: 5301343 bytes
+2025-08-16 06:16:20,774 - INFO - VIDEO_PROCESSING_START - session_id: test_session_012, challenge_type: head_movement
+2025-08-16 06:16:26,742 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_012, duration: 5.968s, success: True
+2025-08-16 06:16:26,839 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_012, result: pass, total_time: 6.441s, processing_time: 5.968s, video_receive_time: 0.435s, file_save_time: 0.020s
+2025-08-16 06:17:45,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_013, challenge_type: head_movement, file_size: 5611225
+2025-08-16 06:17:45,940 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_013, duration: 0.632s, size: 5611225 bytes
+2025-08-16 06:17:46,013 - INFO - VIDEO_PROCESSING_START - session_id: test_session_013, challenge_type: head_movement
+2025-08-16 06:17:50,106 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_013, duration: 4.094s, success: True
+2025-08-16 06:17:50,199 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_013, result: pass, total_time: 4.821s, processing_time: 4.094s, video_receive_time: 0.632s, file_save_time: 0.025s
+2025-08-16 06:19:46,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_014, challenge_type: head_movement, file_size: 7223697
+2025-08-16 06:19:47,989 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_014, duration: 1.681s, size: 7223697 bytes
+2025-08-16 06:19:48,073 - INFO - VIDEO_PROCESSING_START - session_id: test_session_014, challenge_type: head_movement
+2025-08-16 06:19:55,943 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_014, duration: 7.870s, success: True
+2025-08-16 06:19:55,979 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_014, result: pass, total_time: 9.568s, processing_time: 7.870s, video_receive_time: 1.681s, file_save_time: 0.016s
+2025-08-16 06:22:34,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_015, challenge_type: head_movement, file_size: 7331027
+2025-08-16 06:22:34,450 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_015, duration: 0.141s, size: 7331027 bytes
+2025-08-16 06:22:34,475 - INFO - VIDEO_PROCESSING_START - session_id: test_session_015, challenge_type: head_movement
+2025-08-16 06:22:41,759 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_015, duration: 7.284s, success: True
+2025-08-16 06:22:41,832 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_015, result: pass, total_time: 7.447s, processing_time: 7.284s, video_receive_time: 0.141s, file_save_time: 0.015s
+2025-08-16 06:24:25,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_016, challenge_type: head_movement, file_size: 5255728
+2025-08-16 06:24:25,948 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_016, duration: 0.640s, size: 5255728 bytes
+2025-08-16 06:24:25,969 - INFO - VIDEO_PROCESSING_START - session_id: test_session_016, challenge_type: head_movement
+2025-08-16 06:24:31,959 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_016, duration: 5.990s, success: True
+2025-08-16 06:24:32,010 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_016, result: pass, total_time: 6.686s, processing_time: 5.990s, video_receive_time: 0.640s, file_save_time: 0.030s
+2025-08-16 06:26:35,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_017, challenge_type: head_movement, file_size: 7694847
+2025-08-16 06:26:37,178 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_017, duration: 1.869s, size: 7694847 bytes
+2025-08-16 06:26:37,200 - INFO - VIDEO_PROCESSING_START - session_id: test_session_017, challenge_type: head_movement
+2025-08-16 06:26:40,871 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_017, duration: 3.671s, success: True
+2025-08-16 06:26:40,965 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_017, result: pass, total_time: 5.579s, processing_time: 3.671s, video_receive_time: 1.869s, file_save_time: 0.020s
+2025-08-16 06:28:31,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_018, challenge_type: head_movement, file_size: 1196883
+2025-08-16 06:28:33,100 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_018, duration: 1.792s, size: 1196883 bytes
+2025-08-16 06:28:33,196 - INFO - VIDEO_PROCESSING_START - session_id: test_session_018, challenge_type: head_movement
+2025-08-16 06:28:36,782 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_018, duration: 3.586s, success: True
+2025-08-16 06:28:36,831 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_018, result: pass, total_time: 5.398s, processing_time: 3.586s, video_receive_time: 1.792s, file_save_time: 0.043s
+2025-08-16 06:29:46,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_019, challenge_type: head_movement, file_size: 4339953
+2025-08-16 06:29:48,091 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_019, duration: 1.783s, size: 4339953 bytes
+2025-08-16 06:29:48,155 - INFO - VIDEO_PROCESSING_START - session_id: test_session_019, challenge_type: head_movement
+2025-08-16 06:29:56,124 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_019, duration: 7.969s, success: True
+2025-08-16 06:29:56,180 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_019, result: pass, total_time: 9.828s, processing_time: 7.969s, video_receive_time: 1.783s, file_save_time: 0.026s
+2025-08-16 06:32:29,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_020, challenge_type: head_movement, file_size: 5902305
+2025-08-16 06:32:31,041 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_020, duration: 1.732s, size: 5902305 bytes
+2025-08-16 06:32:31,055 - INFO - VIDEO_PROCESSING_START - session_id: test_session_020, challenge_type: head_movement
+2025-08-16 06:32:38,667 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_020, duration: 7.612s, success: True
+2025-08-16 06:32:38,758 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_020, result: pass, total_time: 9.373s, processing_time: 7.612s, video_receive_time: 1.732s, file_save_time: 0.027s
+2025-08-16 06:34:07,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_021, challenge_type: head_movement, file_size: 2752473
+2025-08-16 06:34:07,962 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_021, duration: 0.653s, size: 2752473 bytes
+2025-08-16 06:34:07,994 - INFO - VIDEO_PROCESSING_START - session_id: test_session_021, challenge_type: head_movement
+2025-08-16 06:34:12,859 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_021, duration: 4.865s, success: True
+2025-08-16 06:34:12,904 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_021, result: pass, total_time: 5.607s, processing_time: 4.865s, video_receive_time: 0.653s, file_save_time: 0.017s
+2025-08-16 06:36:30,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_022, challenge_type: head_movement, file_size: 5761688
+2025-08-16 06:36:30,792 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_022, duration: 0.483s, size: 5761688 bytes
+2025-08-16 06:36:30,814 - INFO - VIDEO_PROCESSING_START - session_id: test_session_022, challenge_type: head_movement
+2025-08-16 06:36:37,860 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_022, duration: 7.046s, success: True
+2025-08-16 06:36:37,902 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_022, result: pass, total_time: 7.584s, processing_time: 7.046s, video_receive_time: 0.483s, file_save_time: 0.014s
+2025-08-16 06:37:52,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_023, challenge_type: head_movement, file_size: 8283929
+2025-08-16 06:37:52,736 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_023, duration: 0.427s, size: 8283929 bytes
+2025-08-16 06:37:52,787 - INFO - VIDEO_PROCESSING_START - session_id: test_session_023, challenge_type: head_movement
+2025-08-16 06:37:58,862 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_023, duration: 6.075s, success: True
+2025-08-16 06:37:58,905 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_023, result: pass, total_time: 6.514s, processing_time: 6.075s, video_receive_time: 0.427s, file_save_time: 0.031s
+2025-08-16 06:40:27,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_024, challenge_type: head_movement, file_size: 2954629
+2025-08-16 06:40:29,010 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_024, duration: 1.701s, size: 2954629 bytes
+2025-08-16 06:40:29,067 - INFO - VIDEO_PROCESSING_START - session_id: test_session_024, challenge_type: head_movement
+2025-08-16 06:40:34,316 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_024, duration: 5.249s, success: True
+2025-08-16 06:40:34,358 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_024, result: pass, total_time: 7.040s, processing_time: 5.249s, video_receive_time: 1.701s, file_save_time: 0.021s
+2025-08-16 06:41:50,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_025, challenge_type: head_movement, file_size: 5690357
+2025-08-16 06:41:51,611 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_025, duration: 1.303s, size: 5690357 bytes
+2025-08-16 06:41:51,682 - INFO - VIDEO_PROCESSING_START - session_id: test_session_025, challenge_type: head_movement
+2025-08-16 06:41:54,352 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_025, duration: 2.670s, success: True
+2025-08-16 06:41:54,438 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_025, result: pass, total_time: 4.031s, processing_time: 2.670s, video_receive_time: 1.303s, file_save_time: 0.034s
+2025-08-16 06:44:22,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_026, challenge_type: head_movement, file_size: 6012543
+2025-08-16 06:44:22,615 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_026, duration: 0.307s, size: 6012543 bytes
+2025-08-16 06:44:22,636 - INFO - VIDEO_PROCESSING_START - session_id: test_session_026, challenge_type: head_movement
+2025-08-16 06:44:26,793 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_026, duration: 4.156s, success: True
+2025-08-16 06:44:26,846 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_026, result: pass, total_time: 4.549s, processing_time: 4.156s, video_receive_time: 0.307s, file_save_time: 0.032s
+2025-08-16 06:46:05,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_027, challenge_type: head_movement, file_size: 2135679
+2025-08-16 06:46:05,525 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_027, duration: 0.217s, size: 2135679 bytes
+2025-08-16 06:46:05,583 - INFO - VIDEO_PROCESSING_START - session_id: test_session_027, challenge_type: head_movement
+2025-08-16 06:46:11,143 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_027, duration: 5.561s, success: True
+2025-08-16 06:46:11,232 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_027, result: pass, total_time: 5.792s, processing_time: 5.561s, video_receive_time: 0.217s, file_save_time: 0.046s
+2025-08-16 06:48:33,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_028, challenge_type: head_movement, file_size: 1168012
+2025-08-16 06:48:33,417 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_028, duration: 0.108s, size: 1168012 bytes
+2025-08-16 06:48:33,456 - INFO - VIDEO_PROCESSING_START - session_id: test_session_028, challenge_type: head_movement
+2025-08-16 06:48:39,827 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_028, duration: 6.372s, success: True
+2025-08-16 06:48:39,903 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_028, result: pass, total_time: 6.501s, processing_time: 6.372s, video_receive_time: 0.108s, file_save_time: 0.022s
+2025-08-16 06:50:35,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_029, challenge_type: head_movement, file_size: 1909594
+2025-08-16 06:50:36,610 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_029, duration: 1.301s, size: 1909594 bytes
+2025-08-16 06:50:36,662 - INFO - VIDEO_PROCESSING_START - session_id: test_session_029, challenge_type: head_movement
+2025-08-16 06:50:38,329 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_029, duration: 1.667s, success: True
+2025-08-16 06:50:38,407 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_029, result: pass, total_time: 3.012s, processing_time: 1.667s, video_receive_time: 1.301s, file_save_time: 0.039s
+2025-08-16 06:51:42,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_030, challenge_type: head_movement, file_size: 10484365
+2025-08-16 06:51:43,907 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_030, duration: 1.598s, size: 10484365 bytes
+2025-08-16 06:51:43,926 - INFO - VIDEO_PROCESSING_START - session_id: test_session_030, challenge_type: head_movement
+2025-08-16 06:51:50,336 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_030, duration: 6.410s, success: True
+2025-08-16 06:51:50,419 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_030, result: pass, total_time: 8.035s, processing_time: 6.410s, video_receive_time: 1.598s, file_save_time: 0.028s
+2025-08-16 06:53:37,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_031, challenge_type: head_movement, file_size: 3821621
+2025-08-16 06:53:39,233 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_031, duration: 1.925s, size: 3821621 bytes
+2025-08-16 06:53:39,325 - INFO - VIDEO_PROCESSING_START - session_id: test_session_031, challenge_type: head_movement
+2025-08-16 06:53:46,564 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_031, duration: 7.239s, success: True
+2025-08-16 06:53:46,584 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_031, result: pass, total_time: 9.215s, processing_time: 7.239s, video_receive_time: 1.925s, file_save_time: 0.048s
+2025-08-16 06:55:55,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_032, challenge_type: head_movement, file_size: 7299200
+2025-08-16 06:55:55,530 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_032, duration: 0.222s, size: 7299200 bytes
+2025-08-16 06:55:55,594 - INFO - VIDEO_PROCESSING_START - session_id: test_session_032, challenge_type: head_movement
+2025-08-16 06:55:58,994 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_032, duration: 3.400s, success: True
+2025-08-16 06:55:59,054 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_032, result: pass, total_time: 3.640s, processing_time: 3.400s, video_receive_time: 0.222s, file_save_time: 0.011s
+2025-08-16 06:58:13,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_033, challenge_type: head_movement, file_size: 9160156
+2025-08-16 06:58:14,386 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_033, duration: 1.077s, size: 9160156 bytes
+2025-08-16 06:58:14,420 - INFO - VIDEO_PROCESSING_START - session_id: test_session_033, challenge_type: head_movement
+2025-08-16 06:58:20,397 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_033, duration: 5.977s, success: True
+2025-08-16 06:58:20,416 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_033, result: pass, total_time: 7.118s, processing_time: 5.977s, video_receive_time: 1.077s, file_save_time: 0.014s
+2025-08-16 06:59:36,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_034, challenge_type: head_movement, file_size: 9574703
+2025-08-16 06:59:38,196 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_034, duration: 1.888s, size: 9574703 bytes
+2025-08-16 06:59:38,249 - INFO - VIDEO_PROCESSING_START - session_id: test_session_034, challenge_type: head_movement
+2025-08-16 06:59:43,660 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_034, duration: 5.411s, success: True
+2025-08-16 06:59:43,712 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_034, result: pass, total_time: 7.311s, processing_time: 5.411s, video_receive_time: 1.888s, file_save_time: 0.038s
+2025-08-16 07:01:58,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_035, challenge_type: head_movement, file_size: 9433737
+2025-08-16 07:01:59,568 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_035, duration: 1.259s, size: 9433737 bytes
+2025-08-16 07:01:59,601 - INFO - VIDEO_PROCESSING_START - session_id: test_session_035, challenge_type: head_movement
+2025-08-16 07:02:05,242 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_035, duration: 5.642s, success: True
+2025-08-16 07:02:05,316 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_035, result: pass, total_time: 6.969s, processing_time: 5.642s, video_receive_time: 1.259s, file_save_time: 0.014s
+2025-08-16 07:04:18,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_036, challenge_type: head_movement, file_size: 9754823
+2025-08-16 07:04:19,644 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_036, duration: 1.336s, size: 9754823 bytes
+2025-08-16 07:04:19,660 - INFO - VIDEO_PROCESSING_START - session_id: test_session_036, challenge_type: head_movement
+2025-08-16 07:04:25,287 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_036, duration: 5.626s, success: True
+2025-08-16 07:04:25,300 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_036, result: pass, total_time: 7.060s, processing_time: 5.626s, video_receive_time: 1.336s, file_save_time: 0.036s
+2025-08-16 07:05:58,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_037, challenge_type: head_movement, file_size: 5002113
+2025-08-16 07:05:58,453 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_037, duration: 0.145s, size: 5002113 bytes
+2025-08-16 07:05:58,476 - INFO - VIDEO_PROCESSING_START - session_id: test_session_037, challenge_type: head_movement
+2025-08-16 07:06:00,008 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_037, duration: 1.532s, success: True
+2025-08-16 07:06:00,043 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_037, result: pass, total_time: 1.742s, processing_time: 1.532s, video_receive_time: 0.145s, file_save_time: 0.043s
+2025-08-16 07:08:14,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_038, challenge_type: head_movement, file_size: 7163082
+2025-08-16 07:08:15,499 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_038, duration: 1.191s, size: 7163082 bytes
+2025-08-16 07:08:15,590 - INFO - VIDEO_PROCESSING_START - session_id: test_session_038, challenge_type: head_movement
+2025-08-16 07:08:17,741 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_038, duration: 2.151s, success: True
+2025-08-16 07:08:17,762 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_038, result: pass, total_time: 3.386s, processing_time: 2.151s, video_receive_time: 1.191s, file_save_time: 0.014s
+2025-08-16 07:10:25,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_039, challenge_type: head_movement, file_size: 3405605
+2025-08-16 07:10:26,214 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_039, duration: 0.905s, size: 3405605 bytes
+2025-08-16 07:10:26,265 - INFO - VIDEO_PROCESSING_START - session_id: test_session_039, challenge_type: head_movement
+2025-08-16 07:10:31,458 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_039, duration: 5.194s, success: True
+2025-08-16 07:10:31,476 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_039, result: pass, total_time: 6.130s, processing_time: 5.194s, video_receive_time: 0.905s, file_save_time: 0.038s
+2025-08-16 07:12:25,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_040, challenge_type: head_movement, file_size: 2192534
+2025-08-16 07:12:26,728 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_040, duration: 1.420s, size: 2192534 bytes
+2025-08-16 07:12:26,797 - INFO - VIDEO_PROCESSING_START - session_id: test_session_040, challenge_type: head_movement
+2025-08-16 07:12:29,544 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_040, duration: 2.747s, success: True
+2025-08-16 07:12:29,607 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_040, result: pass, total_time: 4.178s, processing_time: 2.747s, video_receive_time: 1.420s, file_save_time: 0.034s
+2025-08-16 07:14:18,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_041, challenge_type: head_movement, file_size: 5316438
+2025-08-16 07:14:19,220 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_041, duration: 0.911s, size: 5316438 bytes
+2025-08-16 07:14:19,298 - INFO - VIDEO_PROCESSING_START - session_id: test_session_041, challenge_type: head_movement
+2025-08-16 07:14:26,610 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_041, duration: 7.312s, success: True
+2025-08-16 07:14:26,633 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_041, result: pass, total_time: 8.245s, processing_time: 7.312s, video_receive_time: 0.911s, file_save_time: 0.018s
+2025-08-16 07:16:09,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_042, challenge_type: head_movement, file_size: 1786638
+2025-08-16 07:16:10,717 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_042, duration: 1.409s, size: 1786638 bytes
+2025-08-16 07:16:10,790 - INFO - VIDEO_PROCESSING_START - session_id: test_session_042, challenge_type: head_movement
+2025-08-16 07:16:14,111 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_042, duration: 3.321s, success: True
+2025-08-16 07:16:14,171 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_042, result: pass, total_time: 4.791s, processing_time: 3.321s, video_receive_time: 1.409s, file_save_time: 0.038s
+2025-08-16 07:18:14,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_043, challenge_type: head_movement, file_size: 4380582
+2025-08-16 07:18:15,153 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_043, duration: 0.844s, size: 4380582 bytes
+2025-08-16 07:18:15,250 - INFO - VIDEO_PROCESSING_START - session_id: test_session_043, challenge_type: head_movement
+2025-08-16 07:18:16,594 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_043, duration: 1.344s, success: True
+2025-08-16 07:18:16,613 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_043, result: pass, total_time: 2.252s, processing_time: 1.344s, video_receive_time: 0.844s, file_save_time: 0.021s
+2025-08-16 07:20:26,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_044, challenge_type: head_movement, file_size: 8816861
+2025-08-16 07:20:26,784 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_044, duration: 0.476s, size: 8816861 bytes
+2025-08-16 07:20:26,870 - INFO - VIDEO_PROCESSING_START - session_id: test_session_044, challenge_type: head_movement
+2025-08-16 07:20:28,575 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_044, duration: 1.705s, success: True
+2025-08-16 07:20:28,609 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_044, result: pass, total_time: 2.256s, processing_time: 1.705s, video_receive_time: 0.476s, file_save_time: 0.033s
+2025-08-16 07:21:55,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_045, challenge_type: head_movement, file_size: 6211303
+2025-08-16 07:21:56,643 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_045, duration: 1.335s, size: 6211303 bytes
+2025-08-16 07:21:56,690 - INFO - VIDEO_PROCESSING_START - session_id: test_session_045, challenge_type: head_movement
+2025-08-16 07:22:03,098 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_045, duration: 6.408s, success: True
+2025-08-16 07:22:03,118 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_045, result: pass, total_time: 7.820s, processing_time: 6.408s, video_receive_time: 1.335s, file_save_time: 0.016s
+2025-08-16 07:23:43,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_046, challenge_type: head_movement, file_size: 7688449
+2025-08-16 07:23:45,015 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_046, duration: 1.707s, size: 7688449 bytes
+2025-08-16 07:23:45,108 - INFO - VIDEO_PROCESSING_START - session_id: test_session_046, challenge_type: head_movement
+2025-08-16 07:23:49,830 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_046, duration: 4.721s, success: True
+2025-08-16 07:23:49,877 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_046, result: pass, total_time: 6.488s, processing_time: 4.721s, video_receive_time: 1.707s, file_save_time: 0.022s
+2025-08-16 07:26:26,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_047, challenge_type: head_movement, file_size: 9962969
+2025-08-16 07:26:26,814 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_047, duration: 0.505s, size: 9962969 bytes
+2025-08-16 07:26:26,849 - INFO - VIDEO_PROCESSING_START - session_id: test_session_047, challenge_type: head_movement
+2025-08-16 07:26:28,458 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_047, duration: 1.609s, success: True
+2025-08-16 07:26:28,496 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_047, result: pass, total_time: 2.191s, processing_time: 1.609s, video_receive_time: 0.505s, file_save_time: 0.024s
+2025-08-16 07:27:47,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_048, challenge_type: head_movement, file_size: 8981022
+2025-08-16 07:27:48,849 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_048, duration: 1.540s, size: 8981022 bytes
+2025-08-16 07:27:48,948 - INFO - VIDEO_PROCESSING_START - session_id: test_session_048, challenge_type: head_movement
+2025-08-16 07:27:55,320 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_048, duration: 6.371s, success: False
+2025-08-16 07:27:55,380 - WARNING - VIDEO_LIVENESS_FAILED - session_id: test_session_048, total_time: 7.950s, processing_time: 6.371s, error: Video processing failed
+2025-08-16 07:29:43,308 - INFO - VIDEO_LIVENESS_REQUEST_START - session_id: test_session_049, challenge_type: head_movement, file_size: 10310206
+2025-08-16 07:29:45,284 - INFO - VIDEO_FILE_RECEIVE_COMPLETE - session_id: test_session_049, duration: 1.976s, size: 10310206 bytes
+2025-08-16 07:29:45,326 - INFO - VIDEO_PROCESSING_START - session_id: test_session_049, challenge_type: head_movement
+2025-08-16 07:29:50,935 - INFO - VIDEO_PROCESSING_COMPLETE - session_id: test_session_049, duration: 5.609s, success: True
+2025-08-16 07:29:50,967 - INFO - VIDEO_LIVENESS_COMPLETE - session_id: test_session_049, result: pass, total_time: 7.665s, processing_time: 5.609s, video_receive_time: 1.976s, file_save_time: 0.012s

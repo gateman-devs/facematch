@@ -773,7 +773,15 @@ async def submit_simple_challenge(
     Submit video for simple liveness validation.
     Validates either smile or head movement challenge.
     """
-    start_time = time.time()
+    # Performance timing tracking
+    request_start_time = time.time()
+    video_receive_start_time = None
+    video_receive_end_time = None
+    processing_start_time = None
+    processing_end_time = None
+    
+    # Log request start
+    logger.info(f"VIDEO_LIVENESS_REQUEST_START - session_id: {session_id}, challenge_type: {challenge_type}, file_size: {video.size if hasattr(video, 'size') else 'unknown'}")
     
     try:
         # Get simple liveness detector
@@ -799,7 +807,16 @@ async def submit_simple_challenge(
                 detail="Uploaded file must be a video"
             )
         
+        # Start video file reception timing
+        video_receive_start_time = time.time()
+        logger.info(f"VIDEO_FILE_RECEIVE_START - session_id: {session_id}")
+        
         content = await video.read()
+        video_receive_end_time = time.time()
+        video_receive_duration = video_receive_end_time - video_receive_start_time
+        
+        logger.info(f"VIDEO_FILE_RECEIVE_COMPLETE - session_id: {session_id}, duration: {video_receive_duration:.3f}s, size: {len(content)} bytes")
+        
         if len(content) > max_size:
             raise HTTPException(
                 status_code=400,
@@ -807,9 +824,13 @@ async def submit_simple_challenge(
             )
         
         # Save video to temporary file
+        temp_save_start = time.time()
         with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as temp_file:
             temp_video_path = temp_file.name
             temp_file.write(content)
+        temp_save_duration = time.time() - temp_save_start
+        
+        logger.info(f"VIDEO_FILE_SAVE_COMPLETE - session_id: {session_id}, duration: {temp_save_duration:.3f}s, path: {temp_video_path}")
         
         try:
             # Parse movement sequence if provided
@@ -834,6 +855,10 @@ async def submit_simple_challenge(
                 if session_data and session_data.get('enable_face_comparison'):
                     reference_image = session_data.get('reference_image')
             
+            # Start video processing timing
+            processing_start_time = time.time()
+            logger.info(f"VIDEO_PROCESSING_START - session_id: {session_id}, challenge_type: {challenge_type}")
+            
             validation_result = detector.validate_video_challenge(
                 temp_video_path, 
                 challenge_type, 
@@ -842,7 +867,12 @@ async def submit_simple_challenge(
                 reference_image
             )
             
-            processing_time = time.time() - start_time
+            processing_end_time = time.time()
+            processing_duration = processing_end_time - processing_start_time
+            
+            logger.info(f"VIDEO_PROCESSING_COMPLETE - session_id: {session_id}, duration: {processing_duration:.3f}s, success: {validation_result.get('success', False)}")
+            
+            total_time = time.time() - request_start_time
             
             if validation_result['success']:
                 result = "pass" if validation_result['passed'] else "fail"
@@ -852,9 +882,16 @@ async def submit_simple_challenge(
                     'session_id': session_id,
                     'result': result,
                     'challenge_type': challenge_type,
-                    'processing_time': processing_time,
+                    'processing_time': processing_duration,
+                    'total_time': total_time,
                     'details': validation_result
                 }
+                
+                # Log comprehensive performance metrics
+                logger.info(f"VIDEO_LIVENESS_COMPLETE - session_id: {session_id}, result: {result}, "
+                           f"total_time: {total_time:.3f}s, processing_time: {processing_duration:.3f}s, "
+                           f"video_receive_time: {video_receive_duration:.3f}s, "
+                           f"file_save_time: {temp_save_duration:.3f}s")
                 
                 logger.info(f"Simple {challenge_type} challenge {result} for session {session_id}")
                 
@@ -886,9 +923,15 @@ async def submit_simple_challenge(
                     'session_id': session_id,
                     'result': 'fail',
                     'challenge_type': challenge_type,
-                    'processing_time': processing_time,
+                    'processing_time': processing_duration,
+                    'total_time': total_time,
                     'details': validation_result
                 }
+                
+                # Log failed performance metrics
+                logger.warning(f"VIDEO_LIVENESS_FAILED - session_id: {session_id}, "
+                              f"total_time: {total_time:.3f}s, processing_time: {processing_duration:.3f}s, "
+                              f"error: {validation_result.get('error', 'Unknown error')}")
                 
                 try:
                     if session_manager:
@@ -920,8 +963,17 @@ async def submit_simple_challenge(
                 os.unlink(temp_video_path)
         
     except HTTPException:
+        # Log HTTP exception timing
+        if request_start_time:
+            total_time = time.time() - request_start_time
+            logger.error(f"VIDEO_LIVENESS_HTTP_ERROR - session_id: {session_id}, total_time: {total_time:.3f}s")
         raise
     except Exception as e:
+        # Log general exception timing
+        if request_start_time:
+            total_time = time.time() - request_start_time
+            logger.error(f"VIDEO_LIVENESS_EXCEPTION - session_id: {session_id}, total_time: {total_time:.3f}s, error: {str(e)}")
+        
         logger.error(f"Failed to submit simple challenge: {e}")
         raise HTTPException(
             status_code=500,

@@ -449,11 +449,24 @@ class SimpleLivenessDetector:
         Returns:
             Dictionary with validation results
         """
+        # Performance timing tracking
+        processing_start_time = time.time()
+        video_open_start_time = None
+        video_open_end_time = None
+        frame_processing_start_time = None
+        frame_processing_end_time = None
+        face_comparison_start_time = None
+        face_comparison_end_time = None
+        
         try:
             logger.info(f"Validating {challenge_type} challenge: {video_path}")
             
-            # Open video
+            # Time video opening
+            video_open_start_time = time.time()
             cap = cv2.VideoCapture(video_path)
+            video_open_end_time = time.time()
+            video_open_duration = video_open_end_time - video_open_start_time
+            
             if not cap.isOpened():
                 return {
                     'success': False,
@@ -486,17 +499,39 @@ class SimpleLivenessDetector:
             logger.info(f"Video dimensions: {width}x{height}")
             
             if challenge_type == 'head_movement':
+                # Time frame processing
+                frame_processing_start_time = time.time()
                 validation_result = self._validate_head_movement_challenge(cap, fps, movement_sequence, session_id)
+                frame_processing_end_time = time.time()
+                frame_processing_duration = frame_processing_end_time - frame_processing_start_time
                 
                 # Add face comparison if reference image provided
                 if reference_image and validation_result.get('success') and validation_result.get('face_image_path'):
+                    face_comparison_start_time = time.time()
                     face_comparison = self.compare_faces(reference_image, validation_result['face_image_path'])
+                    face_comparison_end_time = time.time()
+                    face_comparison_duration = face_comparison_end_time - face_comparison_start_time
+                    
                     validation_result['face_comparison'] = face_comparison
+                    validation_result['face_comparison_time'] = face_comparison_duration
                     
                     # Update overall pass status to include face comparison
                     if validation_result.get('passed'):
                         validation_result['passed'] = face_comparison.get('match', False)
                         validation_result['face_match_required'] = True
+                
+                # Add timing information to result
+                total_processing_time = time.time() - processing_start_time
+                validation_result['video_open_time'] = video_open_duration
+                validation_result['frame_processing_time'] = frame_processing_duration
+                validation_result['total_processing_time'] = total_processing_time
+                
+                # Log detailed performance metrics
+                logger.info(f"VIDEO_PROCESSING_DETAILS - session_id: {session_id}, "
+                           f"video_open_time: {video_open_duration:.3f}s, "
+                           f"frame_processing_time: {frame_processing_duration:.3f}s, "
+                           f"face_comparison_time: {face_comparison_duration if face_comparison_start_time else 0:.3f}s, "
+                           f"total_processing_time: {total_processing_time:.3f}s")
                 
                 return validation_result
             else:
@@ -701,6 +736,15 @@ class SimpleLivenessDetector:
         Enhanced head movement validation with anti-spoofing and face capture.
         Uses nose position tracking with advanced security features.
         """
+        # Performance timing tracking
+        frame_processing_start_time = time.time()
+        frame_read_start_time = None
+        frame_read_end_time = None
+        mediapipe_start_time = None
+        mediapipe_end_time = None
+        movement_analysis_start_time = None
+        movement_analysis_end_time = None
+        
         nose_positions_with_time = []
         anti_spoofing_scores = []
         total_frames = 0
@@ -709,7 +753,11 @@ class SimpleLivenessDetector:
         best_face_confidence = 0
         
         while True:
+            # Time frame reading
+            frame_read_start_time = time.time()
             ret, frame = cap.read()
+            frame_read_end_time = time.time()
+            
             if not ret:
                 break
                 
@@ -742,8 +790,10 @@ class SimpleLivenessDetector:
                 new_w, new_h = int(w * scale), int(h * scale)
                 rgb_frame = cv2.resize(rgb_frame, (new_w, new_h))
             
-            # Process with MediaPipe
+            # Time MediaPipe processing
+            mediapipe_start_time = time.time()
             results = self.face_mesh.process(rgb_frame)
+            mediapipe_end_time = time.time()
             
             if results.multi_face_landmarks:
                 for face_landmarks in results.multi_face_landmarks:
@@ -808,7 +858,11 @@ class SimpleLivenessDetector:
         
         # If no sequence provided, fall back to basic movement validation
         if not movement_sequence:
+            movement_analysis_start_time = time.time()
             movement_analysis = self._analyze_basic_head_movement(nose_positions_with_time)
+            movement_analysis_end_time = time.time()
+            movement_analysis_duration = movement_analysis_end_time - movement_analysis_start_time
+            
             # More lenient thresholds for better head movement detection
             movement_passed = (movement_analysis['horizontal_range'] > 30 and 
                              movement_analysis['movement_changes'] >= 1)
@@ -826,6 +880,16 @@ class SimpleLivenessDetector:
                 else:
                     converted_analysis[key] = value
             
+            # Calculate total processing time
+            total_frame_processing_time = time.time() - frame_processing_start_time
+            
+            # Log detailed frame processing performance
+            logger.info(f"FRAME_PROCESSING_DETAILS - session_id: {session_id}, "
+                       f"total_frames: {total_frames}, processed_frames: {len(nose_positions_with_time)}, "
+                       f"movement_analysis_time: {movement_analysis_duration:.3f}s, "
+                       f"total_frame_processing_time: {total_frame_processing_time:.3f}s, "
+                       f"avg_time_per_frame: {total_frame_processing_time/total_frames if total_frames > 0 else 0:.3f}s")
+            
             return {
                 'success': True,
                 'passed': bool(overall_passed),
@@ -837,7 +901,9 @@ class SimpleLivenessDetector:
                 'anti_spoof_passed': anti_spoof_passed,
                 'movement_passed': movement_passed,
                 'face_saved': face_saved,
-                'face_image_path': face_image_path
+                'face_image_path': face_image_path,
+                'frame_processing_time': total_frame_processing_time,
+                'movement_analysis_time': movement_analysis_duration
             }
         
         # Validate specific directional sequence

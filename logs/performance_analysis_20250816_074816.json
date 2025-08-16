@@ -1,0 +1,40 @@
+{
+  "total_sessions": 50,
+  "completed_sessions": 42,
+  "failed_sessions": 8,
+  "success_rate": 0.84,
+  "timing_analysis": {
+    "total_time": {
+      "mean": 5.200928571428571,
+      "median": 5.273,
+      "min": 1.903,
+      "max": 8.381,
+      "p95": 7.701,
+      "p99": 8.381
+    },
+    "processing_time": {
+      "mean": 4.1299761904761905,
+      "median": 4.0005,
+      "min": 1.253,
+      "max": 7.009
+    },
+    "receive_time": {
+      "mean": 1.0166904761904763,
+      "median": 0.9794999999999999,
+      "min": 0.101,
+      "max": 1.887
+    }
+  },
+  "performance_metrics": {
+    "avg_total_time": 5.200928571428571,
+    "avg_processing_time": 4.1299761904761905,
+    "processing_efficiency": 0.7940843896923169,
+    "throughput": 0.1922733577795174
+  },
+  "recommendations": [
+    "WARNING: Average total time is over 5 seconds - consider optimization",
+    "WARNING: Average processing time is over 4 seconds - consider optimizing video processing",
+    "WARNING: Success rate is below 95% - monitor for issues",
+    "WARNING: Throughput is below 0.2 requests/second - consider scaling"
+  ]
+}
