@@ -1206,7 +1206,7 @@ class SimpleLivenessDetector:
         return str(most_common_direction), float(final_confidence)
 
     def _validate_movement_sequence(self, nose_positions_with_time: List[Dict], expected_sequence: List[str]) -> Dict:
-        """Validate that head movement follows the expected directional sequence."""
+        """Validate that head movement follows the expected directional sequence by detecting all movements and finding matches."""
         if not nose_positions_with_time or not expected_sequence:
             return {
                 'passed': False,
@@ -1215,74 +1215,55 @@ class SimpleLivenessDetector:
                 'error': 'Insufficient data for sequence validation'
             }
         
-        # Calculate total video duration
-        total_duration = nose_positions_with_time[-1]['timestamp'] - nose_positions_with_time[0]['timestamp']
-        direction_duration = total_duration / len(expected_sequence)
+        # Detect all significant movements throughout the video
+        all_movements = self._detect_all_movements(nose_positions_with_time)
         
-        # Each direction cycle now has two phases: direction (2s) + look center (1.5s)
-        step_duration = 2.0  # Analyze 2 seconds when user should be looking in direction
+        if not all_movements:
+            logger.info("No significant movements detected in video")
+            return {
+                'passed': False,
+                'accuracy': 0.0,
+                'detected_sequence': [],
+                'error': 'No significant movements detected'
+            }
         
-        detected_sequence = []
-        sequence_accuracies = []
+        logger.info(f"Detected {len(all_movements)} significant movements: {[m['direction'] for m in all_movements]}")
         
-        # Analyze each time segment (only the first half of each cycle)
-        for i, expected_direction in enumerate(expected_sequence):
-            start_time = nose_positions_with_time[0]['timestamp'] + (i * direction_duration)
-            end_time = start_time + step_duration  # Only analyze first half of the cycle
+        # Find any sequence of 4 consecutive movements that matches the expected sequence
+        best_match = self._find_best_sequence_match(all_movements, expected_sequence)
+        
+        if best_match['found']:
+            logger.info(f"Found matching sequence! Matched movements: {best_match['matched_movements']}")
+            logger.info(f"Sequence accuracy: {best_match['accuracy']:.3f}")
             
-            # Get nose positions for this time segment (when user should be looking in direction)
-            segment_positions = [
-                pos for pos in nose_positions_with_time 
-                if start_time <= pos['timestamp'] <= end_time
-            ]
+            return {
+                'passed': True,
+                'accuracy': float(best_match['accuracy']),
+                'detected_sequence': best_match['matched_movements'],
+                'expected_sequence': expected_sequence,
+                'all_movements': [m['direction'] for m in all_movements],
+                'best_match_start_index': best_match['start_index'],
+                'best_match_end_index': best_match['end_index'],
+                'total_movements_detected': len(all_movements)
+            }
+        else:
+            logger.info(f"No matching sequence found. All detected movements: {[m['direction'] for m in all_movements]}")
+            logger.info(f"Expected sequence: {expected_sequence}")
             
-            if len(segment_positions) < 3:
-                detected_sequence.append('insufficient_data')
-                sequence_accuracies.append(0.0)
-                continue
+            # Fallback: check if there's any partial match
+            partial_match = self._find_partial_match(all_movements, expected_sequence)
+            if partial_match:
+                logger.info(f"Best partial match: {partial_match['matched']}/{len(expected_sequence)} movements")
             
-            # Detect movement direction in this segment
-            detected_direction, confidence = self._detect_movement_direction(segment_positions)
-            detected_sequence.append(detected_direction)
-            
-            # Log detection details for debugging
-            logger.info(f"Segment {i}: Expected={expected_direction}, Detected={detected_direction}, Confidence={confidence:.3f}, Frames={len(segment_positions)}")
-            
-            # Calculate accuracy for this segment (no partial credit - perfect match only)
-            if detected_direction == expected_direction:
-                sequence_accuracies.append(confidence)
-            else:
-                sequence_accuracies.append(0.0)
-        
-        # Calculate overall accuracy
-        overall_accuracy = float(np.mean(sequence_accuracies)) if sequence_accuracies else 0.0
-        
-        # Strict validation: ALL directions must match perfectly
-        correct_segments = sum(1 for i, (expected, detected) in enumerate(zip(expected_sequence, detected_sequence)) if expected == detected)
-        passed = correct_segments == len(expected_sequence)
-        
-        if not passed:
-            logger.info(f"Validation failed: {correct_segments}/{len(expected_sequence)} segments correctly detected, need ALL to match")
-            logger.info(f"Expected: {expected_sequence}")
-            logger.info(f"Detected: {detected_sequence}")
-        
-        # No fallback validation - strict sequence matching only
-        if not passed:
-            movement_analysis = self._analyze_basic_head_movement(nose_positions_with_time)
-            logger.info(f"Strict validation: movement=({movement_analysis['horizontal_range']:.1f}h, {movement_analysis['vertical_range']:.1f}v), accuracy={overall_accuracy:.3f}")
-        
-        # Log validation results for debugging
-        logger.info(f"Movement validation: Overall accuracy={overall_accuracy:.3f}, Passed={passed}, Segment accuracies={[f'{acc:.3f}' for acc in sequence_accuracies]}")
-        
-        return {
-            'passed': bool(passed),
-            'accuracy': float(overall_accuracy),
-            'detected_sequence': detected_sequence,
-            'expected_sequence': expected_sequence,
-            'segment_accuracies': [float(acc) for acc in sequence_accuracies],
-            'total_duration': float(total_duration),
-            'direction_duration': float(direction_duration)
-        }
+            return {
+                'passed': False,
+                'accuracy': 0.0,
+                'detected_sequence': [m['direction'] for m in all_movements],
+                'expected_sequence': expected_sequence,
+                'all_movements': [m['direction'] for m in all_movements],
+                'total_movements_detected': len(all_movements),
+                'partial_match': partial_match
+            }
     
     def _detect_movement_direction(self, segment_positions: List[Dict]) -> Tuple[str, float]:
         """Detect the primary movement direction in a time segment."""
@@ -1390,6 +1371,158 @@ class SimpleLivenessDetector:
             'total_movement': total_movement,
             'smoothness': total_movement / len(nose_positions) if nose_positions else 0
         }
+
+    def _detect_all_movements(self, nose_positions_with_time: List[Dict]) -> List[Dict]:
+        """Detect all significant movements throughout the video."""
+        if len(nose_positions_with_time) < 10:
+            return []
+        
+        movements = []
+        window_size = 15  # Analyze 15 frames at a time (about 0.5 seconds at 30fps)
+        min_movement_threshold = 15  # Minimum pixel movement to be considered significant
+        
+        for i in range(0, len(nose_positions_with_time) - window_size, window_size // 2):  # 50% overlap
+            window_positions = nose_positions_with_time[i:i + window_size]
+            
+            if len(window_positions) < 5:
+                continue
+            
+            # Calculate movement from start to end of window
+            start_pos = window_positions[0]
+            end_pos = window_positions[-1]
+            
+            dx = (end_pos['x'] - start_pos['x']) * 640
+            dy = (end_pos['y'] - start_pos['y']) * 480
+            
+            abs_dx = abs(dx)
+            abs_dy = abs(dy)
+            
+            # Only consider significant movements
+            if abs_dx < min_movement_threshold and abs_dy < min_movement_threshold:
+                continue
+            
+            # Determine direction
+            if abs_dx > abs_dy:
+                # Horizontal movement - flip for camera mirror effect
+                if dx > 0:
+                    direction = 'left'  # User moved left (camera saw right movement)
+                else:
+                    direction = 'right'  # User moved right (camera saw left movement)
+                confidence = min(abs_dx / 100, 1.0)
+            else:
+                # Vertical movement
+                if dy > 0:
+                    direction = 'down'
+                else:
+                    direction = 'up'
+                confidence = min(abs_dy / 100, 1.0)
+            
+            # Only add if confidence is high enough
+            if confidence > 0.3:
+                movements.append({
+                    'direction': direction,
+                    'confidence': confidence,
+                    'start_time': start_pos['timestamp'],
+                    'end_time': end_pos['timestamp'],
+                    'magnitude': max(abs_dx, abs_dy),
+                    'start_index': i,
+                    'end_index': i + window_size
+                })
+        
+        # Filter out movements that are too close together (within 0.5 seconds)
+        filtered_movements = []
+        for i, movement in enumerate(movements):
+            if i == 0:
+                filtered_movements.append(movement)
+                continue
+            
+            time_diff = movement['start_time'] - filtered_movements[-1]['end_time']
+            if time_diff > 0.5:  # At least 0.5 seconds apart
+                filtered_movements.append(movement)
+        
+        return filtered_movements
+
+    def _find_best_sequence_match(self, movements: List[Dict], expected_sequence: List[str]) -> Dict:
+        """Find the best matching sequence of consecutive movements."""
+        if len(movements) < len(expected_sequence):
+            return {'found': False}
+        
+        best_match = {
+            'found': False,
+            'start_index': -1,
+            'end_index': -1,
+            'matched_movements': [],
+            'accuracy': 0.0
+        }
+        
+        # Try all possible starting positions
+        for start_idx in range(len(movements) - len(expected_sequence) + 1):
+            match_count = 0
+            matched_movements = []
+            
+            for i, expected_direction in enumerate(expected_sequence):
+                movement_idx = start_idx + i
+                if movement_idx >= len(movements):
+                    break
+                
+                detected_direction = movements[movement_idx]['direction']
+                if detected_direction == expected_direction:
+                    match_count += 1
+                    matched_movements.append(detected_direction)
+                else:
+                    matched_movements.append(detected_direction)
+            
+            # Check if we have a complete match
+            if match_count == len(expected_sequence):
+                # Calculate accuracy based on confidence scores
+                confidences = [movements[start_idx + i]['confidence'] for i in range(len(expected_sequence))]
+                accuracy = sum(confidences) / len(confidences)
+                
+                if accuracy > best_match['accuracy']:
+                    best_match = {
+                        'found': True,
+                        'start_index': start_idx,
+                        'end_index': start_idx + len(expected_sequence) - 1,
+                        'matched_movements': matched_movements,
+                        'accuracy': accuracy
+                    }
+        
+        return best_match
+
+    def _find_partial_match(self, movements: List[Dict], expected_sequence: List[str]) -> Dict:
+        """Find the best partial match for debugging purposes."""
+        if len(movements) < len(expected_sequence):
+            return None
+        
+        best_partial = {
+            'matched': 0,
+            'start_index': -1,
+            'matched_movements': []
+        }
+        
+        # Try all possible starting positions
+        for start_idx in range(len(movements) - len(expected_sequence) + 1):
+            match_count = 0
+            matched_movements = []
+            
+            for i, expected_direction in enumerate(expected_sequence):
+                movement_idx = start_idx + i
+                if movement_idx >= len(movements):
+                    break
+                
+                detected_direction = movements[movement_idx]['direction']
+                if detected_direction == expected_direction:
+                    match_count += 1
+                matched_movements.append(detected_direction)
+            
+            if match_count > best_partial['matched']:
+                best_partial = {
+                    'matched': match_count,
+                    'start_index': start_idx,
+                    'matched_movements': matched_movements
+                }
+        
+        return best_partial if best_partial['matched'] > 0 else None
 
 
 # Global detector instance
