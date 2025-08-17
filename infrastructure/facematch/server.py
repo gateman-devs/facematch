@@ -25,8 +25,23 @@ from .liveness import LivenessDetector, validate_liveness_model
 from .facematch import FaceRecognizer, validate_arcface_model, adaptive_threshold
 from .image_utils import load_image_pair, validate_image_input
 from .simple_liveness import initialize_simple_liveness_detector, get_simple_liveness_detector
+from .unified_liveness_detector import (
+    UnifiedLivenessDetector, 
+    LivenessMode, 
+    LivenessResult, 
+    VideoLivenessResult,
+    get_unified_liveness_detector,
+    initialize_unified_liveness_detector
+)
 # Advanced head pose removed - was causing startup issues
 from .redis_manager import initialize_session_manager, get_session_manager
+from .optimized_video_processor import create_optimized_processor, process_video_async
+from .concurrent_video_manager import get_global_video_manager, initialize_video_manager
+from .face_comparison_integration import (
+    FaceComparisonIntegrator,
+    initialize_face_comparison_integrator,
+    get_face_comparison_integrator
+)
 
 # Configure logging
 logging.basicConfig(
@@ -40,6 +55,8 @@ face_detector = None
 liveness_detector = None
 face_recognizer = None
 simple_liveness_detector = None
+unified_liveness_detector = None
+face_comparison_integrator = None
 
 def convert_numpy_types(obj: Any) -> Any:
     """Convert numpy types to Python native types for JSON serialization."""
@@ -242,7 +259,7 @@ class LivenessResultResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize and cleanup application resources."""
-    global face_detector, liveness_detector, face_recognizer, simple_liveness_detector
+    global face_detector, liveness_detector, face_recognizer, simple_liveness_detector, unified_liveness_detector
     
     logger.info("Initializing Face Recognition API with Simple Liveness...")
     
@@ -310,6 +327,19 @@ async def lifespan(app: FastAPI):
             logger.error(f"Failed to initialize simple liveness detector: {e}")
             model_validations['simple_liveness'] = False
         
+        # Initialize unified liveness detector
+        try:
+            unified_liveness_detector = initialize_unified_liveness_detector()
+            model_validations['unified_liveness'] = True
+            logger.info("Unified liveness detector initialized successfully")
+            
+            # Log available modes
+            available_modes = unified_liveness_detector.get_available_modes()
+            logger.info(f"Available liveness modes: {[mode.value for mode in available_modes]}")
+        except Exception as e:
+            logger.error(f"Failed to initialize unified liveness detector: {e}")
+            model_validations['unified_liveness'] = False
+        
         # Initialize advanced 6DoF head pose estimator (temporarily disabled)
         # try:
         #     initialize_advanced_head_pose_estimator()
@@ -329,6 +359,33 @@ async def lifespan(app: FastAPI):
             logger.info("Redis session manager initialized")
         except Exception as e:
             logger.warning(f"Failed to initialize Redis session manager: {e}")
+        
+        # Initialize performance-optimized video processing manager
+        try:
+            max_concurrent_videos = int(os.getenv('MAX_CONCURRENT_VIDEOS', '4'))
+            max_queue_size = int(os.getenv('MAX_QUEUE_SIZE', '20'))
+            memory_limit_mb = float(os.getenv('MEMORY_LIMIT_MB', '4096'))
+            
+            initialize_video_manager(
+                max_concurrent_videos=max_concurrent_videos,
+                max_queue_size=max_queue_size,
+                memory_limit_mb=memory_limit_mb
+            )
+            logger.info(f"Concurrent video manager initialized: {max_concurrent_videos} workers, "
+                       f"{max_queue_size} queue size, {memory_limit_mb}MB memory limit")
+        except Exception as e:
+            logger.warning(f"Failed to initialize concurrent video manager: {e}")
+        
+        # Initialize face comparison integrator
+        try:
+            global face_comparison_integrator
+            face_comparison_integrator = initialize_face_comparison_integrator(
+                face_recognizer=face_recognizer,
+                unified_detector=unified_liveness_detector
+            )
+            logger.info("Face comparison integrator initialized successfully")
+        except Exception as e:
+            logger.warning(f"Failed to initialize face comparison integrator: {e}")
         
         # Log initialization summary
         initialized_models = sum(model_validations.values())
@@ -373,8 +430,13 @@ async def health_check(verbose: bool = False):
         'mtcnn': face_detector is not None,
         'crmnet': liveness_detector is not None,
         'arcface': face_recognizer is not None,
-        'simple_liveness': get_simple_liveness_detector() is not None
+        'simple_liveness': get_simple_liveness_detector() is not None,
+        'unified_liveness': unified_liveness_detector is not None
     }
+    
+    # Add unified liveness detector status details
+    if unified_liveness_detector:
+        models_status['unified_liveness_modes'] = unified_liveness_detector.get_detector_status()
     
     response_data = {
         'status': "healthy" if any(models_status.values()) else "degraded",
@@ -702,6 +764,283 @@ async def match_faces(request: FaceMatchRequest):
         error_data = round_scores_in_response(error_data)
         return FaceMatchResponse(**error_data)
 
+@app.post("/process-video-optimized")
+async def process_video_optimized(
+    video: UploadFile = File(...),
+    expected_sequence: Optional[str] = Form(None),
+    performance_mode: Optional[str] = Form("balanced")
+):
+    """
+    Process video for liveness detection with performance optimizations.
+    
+    This endpoint uses advanced performance optimizations including:
+    - Optimized frame processing pipeline
+    - Efficient memory management
+    - Concurrent processing capabilities
+    - Performance monitoring
+    """
+    start_time = time.time()
+    
+    try:
+        # Validate video file
+        if not video.filename or not video.filename.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid video format. Supported formats: mp4, avi, mov, mkv"
+            )
+        
+        # Parse expected sequence
+        sequence = None
+        if expected_sequence:
+            try:
+                import json
+                sequence = json.loads(expected_sequence)
+                if not isinstance(sequence, list):
+                    raise ValueError("Expected sequence must be a list")
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid expected_sequence format: {e}"
+                )
+        
+        # Validate performance mode
+        if performance_mode not in ['performance', 'memory', 'balanced']:
+            performance_mode = 'balanced'
+        
+        # Save uploaded video to temporary file
+        temp_video_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_file:
+                temp_video_path = temp_file.name
+                shutil.copyfileobj(video.file, temp_file)
+            
+            # Process video with optimizations
+            result = await process_video_async(
+                video_path=temp_video_path,
+                expected_sequence=sequence,
+                performance_mode=performance_mode
+            )
+            
+            # Prepare response
+            response_data = {
+                'success': result.success,
+                'processing_time': result.processing_time,
+                'frames_processed': result.frames_processed,
+                'frames_skipped': result.frames_skipped,
+                'performance_mode': performance_mode
+            }
+            
+            if result.success:
+                response_data.update({
+                    'movements_detected': len(result.movements),
+                    'movements': result.movements,
+                    'validation_result': result.validation_result,
+                    'performance_metrics': result.performance_metrics,
+                    'optimization_applied': result.optimization_applied
+                })
+            else:
+                response_data['error'] = result.error
+            
+            # Convert numpy types for JSON serialization
+            response_data = convert_numpy_types(response_data)
+            
+            logger.info(f"Optimized video processing completed: {result.success} "
+                       f"({len(result.movements) if result.movements else 0} movements) "
+                       f"in {result.processing_time:.3f}s")
+            
+            return JSONResponse(content=response_data)
+            
+        finally:
+            # Clean up temporary file
+            if temp_video_path and os.path.exists(temp_video_path):
+                try:
+                    os.unlink(temp_video_path)
+                except Exception as e:
+                    logger.warning(f"Failed to delete temporary video file: {e}")
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Optimized video processing failed: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                'success': False,
+                'error': str(e),
+                'processing_time': time.time() - start_time
+            }
+        )
+
+@app.post("/submit-video-concurrent")
+async def submit_video_concurrent(
+    video: UploadFile = File(...),
+    expected_sequence: Optional[str] = Form(None),
+    priority: Optional[int] = Form(2)
+):
+    """
+    Submit video for concurrent processing with queue management.
+    
+    This endpoint submits video to a concurrent processing queue and returns
+    immediately with a request ID for tracking.
+    """
+    try:
+        # Validate video file
+        if not video.filename or not video.filename.lower().endswith(('.mp4', '.avi', '.mov', '.mkv')):
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid video format. Supported formats: mp4, avi, mov, mkv"
+            )
+        
+        # Parse expected sequence
+        sequence = None
+        if expected_sequence:
+            try:
+                import json
+                sequence = json.loads(expected_sequence)
+            except Exception as e:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid expected_sequence format: {e}"
+                )
+        
+        # Validate priority
+        if priority not in [1, 2, 3]:
+            priority = 2
+        
+        # Save uploaded video to temporary file
+        temp_video_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp4') as temp_file:
+                temp_video_path = temp_file.name
+                shutil.copyfileobj(video.file, temp_file)
+            
+            # Submit to concurrent processing manager
+            video_manager = get_global_video_manager()
+            request_id = video_manager.submit_video_processing(
+                video_path=temp_video_path,
+                expected_sequence=sequence,
+                priority=priority
+            )
+            
+            return JSONResponse(content={
+                'success': True,
+                'request_id': request_id,
+                'status': 'queued',
+                'priority': priority,
+                'message': 'Video submitted for processing'
+            })
+            
+        except ValueError as e:
+            # Queue full or memory limit exceeded
+            if temp_video_path and os.path.exists(temp_video_path):
+                os.unlink(temp_video_path)
+            
+            raise HTTPException(
+                status_code=503,
+                detail=str(e)
+            )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Video submission failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Video submission failed: {e}"
+        )
+
+@app.get("/video-processing-status/{request_id}")
+async def get_video_processing_status(request_id: str):
+    """Get status of a video processing request."""
+    try:
+        video_manager = get_global_video_manager()
+        status = video_manager.get_request_status(request_id)
+        
+        return JSONResponse(content=status)
+        
+    except Exception as e:
+        logger.error(f"Failed to get processing status: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                'success': False,
+                'error': str(e)
+            }
+        )
+
+@app.get("/video-processing-result/{request_id}")
+async def get_video_processing_result(request_id: str):
+    """Get result of a completed video processing request."""
+    try:
+        video_manager = get_global_video_manager()
+        result = video_manager.get_result(request_id)
+        
+        if result is None:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    'success': False,
+                    'error': 'Result not found or processing not completed'
+                }
+            )
+        
+        # Convert result to response format
+        response_data = {
+            'success': result.success,
+            'processing_time': result.processing_time,
+            'frames_processed': result.frames_processed,
+            'frames_skipped': result.frames_skipped
+        }
+        
+        if result.success:
+            response_data.update({
+                'movements_detected': len(result.movements),
+                'movements': result.movements,
+                'validation_result': result.validation_result,
+                'performance_metrics': result.performance_metrics,
+                'optimization_applied': result.optimization_applied
+            })
+        else:
+            response_data['error'] = result.error
+        
+        # Convert numpy types for JSON serialization
+        response_data = convert_numpy_types(response_data)
+        
+        return JSONResponse(content=response_data)
+        
+    except Exception as e:
+        logger.error(f"Failed to get processing result: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                'success': False,
+                'error': str(e)
+            }
+        )
+
+@app.get("/processing-statistics")
+async def get_processing_statistics():
+    """Get current processing statistics and performance metrics."""
+    try:
+        video_manager = get_global_video_manager()
+        stats = video_manager.get_processing_statistics()
+        
+        return JSONResponse(content={
+            'success': True,
+            'statistics': stats,
+            'timestamp': time.time()
+        })
+        
+    except Exception as e:
+        logger.error(f"Failed to get processing statistics: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                'success': False,
+                'error': str(e)
+            }
+        )
+
 @app.post("/create-simple-challenge")
 async def create_simple_challenge():
     """
@@ -709,15 +1048,15 @@ async def create_simple_challenge():
     Randomly chooses between smile and head movement challenges.
     """
     try:
-        # Get simple liveness detector
-        detector = get_simple_liveness_detector()
+        # Get unified liveness detector
+        detector = get_unified_liveness_detector()
         if not detector:
             raise HTTPException(
                 status_code=503,
-                detail="Simple liveness detector not available"
+                detail="Unified liveness detector not available"
             )
         
-        # Generate random challenge
+        # Generate random challenge using unified interface
         challenge = detector.generate_challenge()
         
         # Create simple session (no Redis needed for simple version)
@@ -784,12 +1123,12 @@ async def submit_simple_challenge(
     logger.info(f"VIDEO_LIVENESS_REQUEST_START - session_id: {session_id}, challenge_type: {challenge_type}, file_size: {video.size if hasattr(video, 'size') else 'unknown'}")
     
     try:
-        # Get simple liveness detector
-        detector = get_simple_liveness_detector()
+        # Get unified liveness detector
+        detector = get_unified_liveness_detector()
         if not detector:
             raise HTTPException(
                 status_code=503,
-                detail="Simple liveness detector not available"
+                detail="Unified liveness detector not available"
             )
         
         # Validate challenge type - Only head_movement for Gateman
@@ -857,15 +1196,66 @@ async def submit_simple_challenge(
             
             # Start video processing timing
             processing_start_time = time.time()
-            logger.info(f"VIDEO_PROCESSING_START - session_id: {session_id}, challenge_type: {challenge_type}")
+            logger.info(f"VIDEO_PROCESSING_START - session_id: {session_id}, challenge_type: {challenge_type}, "
+                       f"has_reference_image: {bool(reference_image)}")
             
-            validation_result = detector.validate_video_challenge(
-                temp_video_path, 
-                challenge_type, 
-                parsed_movement_sequence,
-                session_id,
-                reference_image
-            )
+            # Use face comparison integrator for comprehensive liveness + face comparison
+            integrator = get_face_comparison_integrator()
+            if integrator and reference_image:
+                # Use integrated approach when face comparison is required
+                integrated_result = integrator.integrate_with_liveness_detection(
+                    video_path=temp_video_path,
+                    reference_image=reference_image,
+                    movement_sequence=parsed_movement_sequence,
+                    session_id=session_id
+                )
+                
+                # Convert integrated result to validation result format
+                validation_result = {
+                    'success': integrated_result.liveness_success,
+                    'passed': integrated_result.overall_passed,
+                    'confidence': integrated_result.liveness_score,
+                    'liveness_score': integrated_result.liveness_score,
+                    'error': integrated_result.error,
+                    'detected_sequence': integrated_result.liveness_details.get('detected_sequence') if integrated_result.liveness_details else None,
+                    'expected_sequence': integrated_result.liveness_details.get('expected_sequence') if integrated_result.liveness_details else None,
+                    'sequence_accuracy': integrated_result.liveness_details.get('sequence_accuracy') if integrated_result.liveness_details else None,
+                    'face_image_path': None,  # Will be set from liveness details if available
+                    'face_comparison': {
+                        'success': integrated_result.face_comparison_success,
+                        'match': integrated_result.face_comparison_match,
+                        'similarity_score': integrated_result.face_comparison_score,
+                        'details': integrated_result.face_comparison_details
+                    } if integrated_result.face_comparison_details else None,
+                    'details': integrated_result.liveness_details,
+                    'movement_details': integrated_result.liveness_details.get('movement_details') if integrated_result.liveness_details else None,
+                    'anti_spoofing_details': integrated_result.liveness_details.get('anti_spoofing_details') if integrated_result.liveness_details else None
+                }
+            else:
+                # Use standard unified detector for liveness only
+                validation_result = detector.detect_video_liveness(
+                    video_path=temp_video_path,
+                    movement_sequence=parsed_movement_sequence,
+                    session_id=session_id,
+                    reference_image=reference_image
+                )
+                
+                # Convert VideoLivenessResult to dict format for compatibility
+                validation_result = {
+                    'success': validation_result.success,
+                    'passed': validation_result.passed,
+                    'confidence': validation_result.confidence,
+                    'liveness_score': validation_result.liveness_score,
+                    'error': validation_result.error,
+                    'detected_sequence': validation_result.detected_sequence,
+                    'expected_sequence': validation_result.expected_sequence,
+                    'sequence_accuracy': validation_result.sequence_accuracy,
+                    'face_image_path': validation_result.face_image_path,
+                    'face_comparison': validation_result.face_comparison,
+                    'details': validation_result.details,
+                    'movement_details': validation_result.movement_details,
+                    'anti_spoofing_details': validation_result.anti_spoofing_details
+                }
             
             processing_end_time = time.time()
             processing_duration = processing_end_time - processing_start_time
@@ -988,39 +1378,39 @@ async def image_liveness_check(request: ImageLivenessRequest):
     start_time = time.time()
     
     try:
-        # Get simple liveness detector
-        detector = get_simple_liveness_detector()
+        # Get unified liveness detector
+        detector = get_unified_liveness_detector()
         if not detector:
             raise HTTPException(
                 status_code=503,
-                detail="Simple liveness detector not available"
+                detail="Unified liveness detector not available"
             )
         
         logger.info(f"Processing image liveness check for image input")
         
-        # Perform image liveness check
-        result = detector.perform_image_liveness_check(request.image)
+        # Perform image liveness check using unified interface
+        result = detector.detect_image_liveness(request.image)
         
         processing_time = time.time() - start_time
         
-        if result['success']:
+        if result.success:
             return ImageLivenessResponse(
                 success=True,
-                passed=result['passed'],
-                liveness_score=result['liveness_score'],
-                face_detected=result.get('face_detected', False),
+                passed=result.passed,
+                liveness_score=result.liveness_score,
+                face_detected=result.details.get('face_detected', False) if result.details else False,
                 processing_time=processing_time,
-                anti_spoofing=result.get('anti_spoofing', {}),
-                error=result.get('error')
+                anti_spoofing=result.anti_spoofing_details or {},
+                error=result.error
             )
         else:
             return ImageLivenessResponse(
                 success=False,
                 passed=False,
-                liveness_score=result.get('liveness_score', 0.0),
+                liveness_score=result.liveness_score,
                 face_detected=False,
                 processing_time=processing_time,
-                error=result.get('error', 'Image liveness check failed')
+                error=result.error or 'Image liveness check failed'
             )
             
     except HTTPException:
@@ -1040,9 +1430,10 @@ async def face_comparison(request: FaceComparisonRequest):
     start_time = time.time()
     
     try:
-        # Get simple liveness detector (which has face comparison functionality)
-        detector = get_simple_liveness_detector()
-        if not detector:
+        # Get face comparison integrator
+        integrator = get_face_comparison_integrator()
+        if not integrator:
+            logger.error("Face comparison integrator not available")
             raise HTTPException(
                 status_code=503,
                 detail="Face comparison service not available"
@@ -1050,38 +1441,48 @@ async def face_comparison(request: FaceComparisonRequest):
         
         logger.info(f"Processing face comparison with threshold {request.threshold}")
         
-        # Perform face comparison
-        result = detector.compare_faces(request.image1, request.image2, request.threshold)
+        # Perform face comparison using integrator with comprehensive error handling
+        result = integrator.compare_faces_with_validation(
+            image1=request.image1,
+            image2=request.image2,
+            threshold=request.threshold,
+            enable_quality_check=True,
+            session_id=None  # No session ID for direct face comparison
+        )
         
-        processing_time = time.time() - start_time
-        
-        if result['success']:
+        # Convert integrator result to API response
+        if result.success:
+            logger.info(f"Face comparison completed successfully: match={result.match}, "
+                       f"similarity={result.similarity_score:.4f}, confidence={result.confidence}")
             return FaceComparisonResponse(
                 success=True,
-                match=result['match'],
-                similarity_score=result['similarity_score'],
-                threshold=result['threshold'],
-                confidence=result.get('confidence', 'unknown'),
-                processing_time=processing_time
+                match=result.match,
+                similarity_score=result.similarity_score,
+                threshold=result.threshold,
+                confidence=result.confidence,
+                processing_time=result.processing_time
             )
         else:
+            logger.warning(f"Face comparison failed: {result.error} (code: {result.error_code})")
             return FaceComparisonResponse(
                 success=False,
                 match=False,
-                similarity_score=result.get('similarity_score', 0.0),
-                threshold=request.threshold,
-                confidence='unknown',
-                processing_time=processing_time,
-                error=result.get('error', 'Face comparison failed')
+                similarity_score=result.similarity_score,
+                threshold=result.threshold,
+                confidence=result.confidence,
+                processing_time=result.processing_time,
+                error=result.error
             )
             
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to perform face comparison: {e}")
+        processing_time = time.time() - start_time
+        error_msg = f"Unexpected error in face comparison endpoint: {str(e)}"
+        logger.error(error_msg)
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to perform face comparison: {str(e)}"
+            detail=f"Face comparison failed: {str(e)}"
         )
 
 @app.post("/create-challenge-with-comparison")
@@ -1090,14 +1491,14 @@ async def create_challenge_with_comparison(request: VideoChallengeWithComparison
     Create a video liveness challenge with optional face comparison.
     """
     try:
-        detector = get_simple_liveness_detector()
+        detector = get_unified_liveness_detector()
         if not detector:
             raise HTTPException(
                 status_code=503,
-                detail="Simple liveness detector not available"
+                detail="Unified liveness detector not available"
             )
         
-        # Generate challenge
+        # Generate challenge using unified interface
         challenge = detector.generate_challenge()
         session_id = f"simple_{int(time.time() * 1000)}"
         base_url = os.getenv('BASE_URL', 'http://localhost:8000')

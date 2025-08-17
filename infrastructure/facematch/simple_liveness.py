@@ -8,13 +8,46 @@ import numpy as np
 import logging
 import random
 import time
-import tempfile
 import os
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import mediapipe as mp
 from .image_utils import get_image_processor
+from .movement_config import (
+    MovementThresholdConfig, 
+    AdaptiveThresholdCalculator, 
+    MovementValidationConfig,
+    create_default_movement_config,
+    create_adaptive_calculator,
+    create_movement_validation_config
+)
+from .movement_confidence import (
+    MovementConfidenceScorer,
+    ConfidenceConfig,
+    MovementData,
+    create_default_confidence_config,
+    create_confidence_scorer
+)
+from .flexible_sequence_validator import (
+    FlexibleSequenceValidator,
+    ValidationConfig,
+    create_flexible_sequence_validator,
+    create_default_validation_config
+)
+from .motion_consistency import (
+    MotionConsistencyValidator,
+    MotionConsistencyConfig,
+    create_motion_consistency_validator,
+    create_default_motion_consistency_config
+)
+from .enhanced_anti_spoofing import (
+    EnhancedAntiSpoofingEngine,
+    AntiSpoofingConfig,
+    AntiSpoofingResult,
+    create_enhanced_anti_spoofing_engine,
+    create_default_anti_spoofing_config
+)
 # Advanced head pose functionality removed for stability
 
 # Configure logging
@@ -24,7 +57,7 @@ logger = logging.getLogger(__name__)
 class SimpleLivenessDetector:
     """Simple liveness detection using smile and head movement."""
     
-    def __init__(self):
+    def __init__(self, movement_config: Optional[MovementThresholdConfig] = None):
         """Initialize the simple liveness detector."""
         self.mp_face_mesh = mp.solutions.face_mesh
         self.mp_drawing = mp.solutions.drawing_utils
@@ -38,6 +71,28 @@ class SimpleLivenessDetector:
         
         # Challenge types - Only head movement for Gateman
         self.challenge_types = ['head_movement']
+        
+        # Initialize enhanced movement threshold configuration
+        self.movement_config = movement_config or create_default_movement_config()
+        self.adaptive_calculator = create_adaptive_calculator(self.movement_config)
+        self.validation_config = create_movement_validation_config()
+        
+        # Initialize comprehensive movement confidence scoring system
+        self.confidence_scorer = create_confidence_scorer()
+        
+        # Initialize flexible sequence validator for enhanced sequence validation
+        self.sequence_validator = create_flexible_sequence_validator(create_default_validation_config())
+        
+        # Initialize motion consistency validator for detecting artificial motion and video artifacts
+        self.motion_consistency_validator = create_motion_consistency_validator(create_default_motion_consistency_config())
+        
+        # Initialize enhanced anti-spoofing engine for comprehensive detection
+        self.enhanced_anti_spoofing = create_enhanced_anti_spoofing_engine(create_default_anti_spoofing_config())
+        
+        # Cache for adaptive thresholds to avoid recalculation
+        self._adaptive_thresholds_cache = None
+        self._last_face_size = None
+        self._last_quality_metrics = None
         
         # Smile detection landmarks (mouth corners and center)
         self.smile_landmarks = {
@@ -72,7 +127,7 @@ class SimpleLivenessDetector:
         # Initialize image processor for URL/base64 handling
         self.image_processor = get_image_processor()
         
-        logger.info("SimpleLivenessDetector initialized with Enhanced Anti-Spoofing + Face Capture + Face Comparison")
+        logger.info("SimpleLivenessDetector initialized with Enhanced Anti-Spoofing + Face Capture + Face Comparison + Configurable Movement Thresholds")
     
     def perform_image_liveness_check(self, image_input: str) -> Dict:
         """
@@ -103,9 +158,9 @@ class SimpleLivenessDetector:
             # Resize if needed
             image = self.image_processor.resize_image_if_needed(image)
             
-            # Perform anti-spoofing analysis
-            anti_spoof_features = self.analyze_anti_spoofing_features(image)
-            liveness_score = anti_spoof_features.get('overall_liveness_score', 0.0)
+            # Perform enhanced anti-spoofing analysis
+            anti_spoof_result = self.enhanced_anti_spoofing.analyze_frame(image)
+            liveness_score = anti_spoof_result.overall_score
             
             # Check for face detection
             rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -118,7 +173,17 @@ class SimpleLivenessDetector:
                     'passed': False,
                     'error': 'No face detected in the image',
                     'liveness_score': liveness_score,
-                    'anti_spoofing': anti_spoof_features,
+                    'anti_spoofing': {
+                        'overall_score': anti_spoof_result.overall_score,
+                        'texture_score': anti_spoof_result.texture_score,
+                        'lighting_score': anti_spoof_result.lighting_score,
+                        'color_score': anti_spoof_result.color_score,
+                        'edge_score': anti_spoof_result.edge_score,
+                        'screen_reflection_score': anti_spoof_result.screen_reflection_score,
+                        'passed': anti_spoof_result.passed,
+                        'confidence': anti_spoof_result.confidence,
+                        'analysis_details': anti_spoof_result.analysis_details
+                    },
                     'face_detected': False
                 }
             
@@ -130,7 +195,17 @@ class SimpleLivenessDetector:
                 'success': True,
                 'passed': passed,
                 'liveness_score': liveness_score,
-                'anti_spoofing': anti_spoof_features,
+                'anti_spoofing': {
+                    'overall_score': anti_spoof_result.overall_score,
+                    'texture_score': anti_spoof_result.texture_score,
+                    'lighting_score': anti_spoof_result.lighting_score,
+                    'color_score': anti_spoof_result.color_score,
+                    'edge_score': anti_spoof_result.edge_score,
+                    'screen_reflection_score': anti_spoof_result.screen_reflection_score,
+                    'passed': anti_spoof_result.passed,
+                    'confidence': anti_spoof_result.confidence,
+                    'analysis_details': anti_spoof_result.analysis_details
+                },
                 'face_detected': face_detected,
                 'threshold': liveness_threshold,
                 'validation_message': validation_message
@@ -304,119 +379,96 @@ class SimpleLivenessDetector:
         # Return local filepath only
         return filepath
     
-    def analyze_anti_spoofing_features(self, frame: np.ndarray) -> Dict[str, float]:
-        """
-        Analyze frame for anti-spoofing features including texture analysis,
-        lighting consistency, and motion patterns.
-        """
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # 1. Texture Analysis using Local Binary Patterns
-        texture_score = self._calculate_texture_variance(gray)
-        
-        # 2. Lighting Analysis
-        lighting_score = self._analyze_lighting_distribution(gray)
-        
-        # 3. Edge Density Analysis  
-        edge_score = self._calculate_edge_density(gray)
-        
-        # 4. Color Distribution Analysis
-        color_score = self._analyze_color_distribution(frame)
-        
-        # 5. Motion Blur Analysis
-        blur_score = self._calculate_motion_blur(gray)
-        
-        return {
-            'texture_score': float(texture_score),
-            'lighting_score': float(lighting_score),
-            'edge_score': float(edge_score),
-            'color_score': float(color_score),
-            'blur_score': float(blur_score),
-            'overall_liveness_score': float(np.mean([texture_score, lighting_score, edge_score, color_score, blur_score]))
-        }
+
     
-    def _calculate_texture_variance(self, gray_frame: np.ndarray) -> float:
-        """Calculate texture variance to detect flat/printed surfaces."""
-        # Use Laplacian variance to measure texture
-        laplacian_var = cv2.Laplacian(gray_frame, cv2.CV_64F).var()
-        
-        # Normalize to 0-1 range (higher = more texture = more likely real)
-        normalized_score = min(laplacian_var / 1000.0, 1.0)
-        return normalized_score
+    def _calculate_video_quality_metrics(self, frame: np.ndarray) -> Dict[str, float]:
+        """Calculate video quality metrics for adaptive threshold calculation."""
+        try:
+            # Convert to grayscale for analysis
+            if len(frame.shape) == 3:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = frame
+            
+            # Calculate brightness (mean pixel value)
+            brightness = float(np.mean(gray))
+            
+            # Calculate contrast (standard deviation)
+            contrast = float(np.std(gray))
+            
+            # Calculate sharpness using Laplacian variance
+            laplacian = cv2.Laplacian(gray, cv2.CV_64F)
+            sharpness = float(laplacian.var())
+            
+            return {
+                'brightness': brightness,
+                'contrast': contrast,
+                'sharpness': sharpness
+            }
+        except Exception as e:
+            logger.warning(f"Failed to calculate video quality metrics: {e}")
+            # Return default values
+            return {
+                'brightness': 128.0,
+                'contrast': 50.0,
+                'sharpness': 100.0
+            }
     
-    def _analyze_lighting_distribution(self, gray_frame: np.ndarray) -> float:
-        """Analyze lighting distribution to detect screen/print reflections."""
-        # Calculate histogram
-        hist = cv2.calcHist([gray_frame], [0], None, [256], [0, 256])
-        
-        # Check for unnatural lighting peaks (screens often have specific brightness)
-        hist_normalized = hist.flatten() / hist.sum()
-        
-        # Real faces have more distributed lighting
-        entropy = -np.sum(hist_normalized * np.log(hist_normalized + 1e-7))
-        
-        # Normalize entropy score (higher entropy = more natural lighting)
-        normalized_score = min(entropy / 8.0, 1.0)
-        return normalized_score
+    def _calculate_face_size(self, face_landmarks, frame_shape: Tuple[int, int, int]) -> Tuple[int, int]:
+        """Calculate face bounding box size from MediaPipe landmarks."""
+        try:
+            height, width = frame_shape[:2]
+            
+            # Get all landmark coordinates
+            x_coords = [landmark.x * width for landmark in face_landmarks.landmark]
+            y_coords = [landmark.y * height for landmark in face_landmarks.landmark]
+            
+            # Calculate bounding box
+            min_x, max_x = min(x_coords), max(x_coords)
+            min_y, max_y = min(y_coords), max(y_coords)
+            
+            face_width = int(max_x - min_x)
+            face_height = int(max_y - min_y)
+            
+            return (face_width, face_height)
+        except Exception as e:
+            logger.warning(f"Failed to calculate face size: {e}")
+            # Return default face size (roughly 1/4 of frame)
+            height, width = frame_shape[:2]
+            return (width // 4, height // 4)
     
-    def _calculate_edge_density(self, gray_frame: np.ndarray) -> float:
-        """Calculate edge density - real faces have natural edge patterns."""
-        # Apply Canny edge detection
-        edges = cv2.Canny(gray_frame, 50, 150)
-        
-        # Calculate edge density
-        edge_density = np.sum(edges > 0) / edges.size
-        
-        # Real faces typically have moderate edge density
-        # Too high = noisy/artificial, too low = flat/blurred
-        optimal_range = (0.02, 0.15)
-        if optimal_range[0] <= edge_density <= optimal_range[1]:
-            score = 1.0
-        else:
-            # Penalize values outside optimal range
-            distance = min(abs(edge_density - optimal_range[0]), abs(edge_density - optimal_range[1]))
-            score = max(0.0, 1.0 - distance * 10)
-        
-        return score
-    
-    def _analyze_color_distribution(self, frame: np.ndarray) -> float:
-        """Analyze color distribution for natural skin tones."""
-        # Convert to HSV for better skin tone analysis
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        
-        # Define skin tone ranges in HSV
-        lower_skin = np.array([0, 20, 70])
-        upper_skin = np.array([20, 255, 255])
-        
-        # Create mask for skin-like colors
-        skin_mask = cv2.inRange(hsv, lower_skin, upper_skin)
-        
-        # Calculate percentage of skin-like pixels
-        skin_percentage = np.sum(skin_mask > 0) / skin_mask.size
-        
-        # Real faces should have reasonable skin tone distribution
-        if 0.1 <= skin_percentage <= 0.7:
-            score = 1.0
-        else:
-            score = max(0.0, 1.0 - abs(skin_percentage - 0.4) * 2)
-        
-        return score
-    
-    def _calculate_motion_blur(self, gray_frame: np.ndarray) -> float:
-        """Calculate motion blur to detect video artifacts."""
-        # Use gradient magnitude to detect blur
-        grad_x = cv2.Sobel(gray_frame, cv2.CV_64F, 1, 0, ksize=3)
-        grad_y = cv2.Sobel(gray_frame, cv2.CV_64F, 0, 1, ksize=3)
-        
-        # Calculate gradient magnitude
-        gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
-        
-        # Higher gradient magnitude = less blur = more likely real
-        mean_gradient = np.mean(gradient_magnitude)
-        
-        # Normalize (real faces typically have gradients in this range)
-        normalized_score = min(mean_gradient / 100.0, 1.0)
-        return normalized_score
+    def _get_adaptive_thresholds(self, frame: np.ndarray, face_landmarks) -> Dict[str, float]:
+        """Get adaptive thresholds based on current frame and face detection."""
+        try:
+            # Calculate current metrics
+            quality_metrics = self._calculate_video_quality_metrics(frame)
+            face_size = self._calculate_face_size(face_landmarks, frame.shape)
+            frame_dimensions = (frame.shape[1], frame.shape[0])  # (width, height)
+            
+            # Check if we can use cached thresholds
+            if (self._adaptive_thresholds_cache is not None and 
+                self._last_face_size == face_size and 
+                self._last_quality_metrics == quality_metrics):
+                return self._adaptive_thresholds_cache
+            
+            # Calculate new adaptive thresholds
+            adaptive_thresholds = self.adaptive_calculator.calculate_adaptive_thresholds(
+                face_size=face_size,
+                video_quality_metrics=quality_metrics,
+                frame_dimensions=frame_dimensions
+            )
+            
+            # Cache the results
+            self._adaptive_thresholds_cache = adaptive_thresholds
+            self._last_face_size = face_size
+            self._last_quality_metrics = quality_metrics
+            
+            return adaptive_thresholds
+            
+        except Exception as e:
+            logger.warning(f"Failed to calculate adaptive thresholds: {e}")
+            # Return base thresholds as fallback
+            return self.adaptive_calculator._get_base_thresholds()
     
     def generate_challenge(self) -> Dict:
         """Generate a head movement challenge with anti-spoofing validation."""
@@ -752,6 +804,11 @@ class SimpleLivenessDetector:
         best_face_frame = None
         best_face_confidence = 0
         
+        # Collect frames and landmarks for motion consistency analysis
+        collected_frames = []
+        collected_landmarks = []
+        frame_timestamps = []
+        
         while True:
             # Time frame reading
             frame_read_start_time = time.time()
@@ -806,12 +863,17 @@ class SimpleLivenessDetector:
                             'y': float(nose_pos[1])
                         })
                         
-                        # Perform anti-spoofing analysis
-                        anti_spoof_features = self.analyze_anti_spoofing_features(frame)
-                        anti_spoofing_scores.append(anti_spoof_features)
+                        # Collect frame and landmarks for motion consistency analysis
+                        collected_frames.append(frame.copy())
+                        collected_landmarks.append(face_landmarks)
+                        frame_timestamps.append(timestamp)
+                        
+                        # Perform enhanced anti-spoofing analysis
+                        anti_spoof_result = self.enhanced_anti_spoofing.analyze_frame(frame)
+                        anti_spoofing_scores.append(anti_spoof_result)
                         
                         # Save best quality face image for matching
-                        face_confidence = anti_spoof_features['overall_liveness_score']
+                        face_confidence = anti_spoof_result.overall_score
                         if face_confidence > best_face_confidence and session_id:
                             best_face_confidence = face_confidence
                             best_face_frame = frame.copy()
@@ -832,14 +894,58 @@ class SimpleLivenessDetector:
         
         logger.info(f"Enhanced Validation: Processed {total_frames} total frames, found {len(nose_positions_with_time)} valid face positions")
         
-        # Calculate anti-spoofing metrics
+        # Calculate enhanced anti-spoofing metrics
         avg_anti_spoofing = {}
         if anti_spoofing_scores:
-            for key in anti_spoofing_scores[0].keys():
-                avg_anti_spoofing[key] = float(np.mean([score[key] for score in anti_spoofing_scores]))
+            # Extract scores from AntiSpoofingResult objects
+            overall_scores = [result.overall_score for result in anti_spoofing_scores]
+            texture_scores = [result.texture_score for result in anti_spoofing_scores]
+            lighting_scores = [result.lighting_score for result in anti_spoofing_scores]
+            color_scores = [result.color_score for result in anti_spoofing_scores]
+            edge_scores = [result.edge_score for result in anti_spoofing_scores]
+            screen_scores = [result.screen_reflection_score for result in anti_spoofing_scores]
+            confidence_scores = [result.confidence for result in anti_spoofing_scores]
+            
+            avg_anti_spoofing = {
+                'overall_score': float(np.mean(overall_scores)),
+                'texture_score': float(np.mean(texture_scores)),
+                'lighting_score': float(np.mean(lighting_scores)),
+                'color_score': float(np.mean(color_scores)),
+                'edge_score': float(np.mean(edge_scores)),
+                'screen_reflection_score': float(np.mean(screen_scores)),
+                'confidence': float(np.mean(confidence_scores)),
+                'passed': float(np.mean([result.passed for result in anti_spoofing_scores])) > 0.5
+            }
         
         # Determine if anti-spoofing validation passed - more lenient threshold
-        anti_spoof_passed = avg_anti_spoofing.get('overall_liveness_score', 0) >= 0.2
+        anti_spoof_passed = avg_anti_spoofing.get('overall_score', 0) >= 0.2
+        
+        # Perform motion consistency analysis if we have sufficient frames
+        motion_consistency_result = None
+        motion_consistency_passed = True  # Default to pass if analysis not performed
+        
+        if len(collected_frames) >= 5:
+            try:
+                logger.info(f"Performing motion consistency analysis on {len(collected_frames)} frames")
+                motion_consistency_result = self.motion_consistency_validator.analyze_motion_consistency(
+                    collected_frames, collected_landmarks, frame_timestamps
+                )
+                
+                # Motion consistency validation passes if overall score is above threshold
+                motion_consistency_passed = motion_consistency_result.is_natural_motion
+                
+                logger.info(f"Motion consistency analysis: score={motion_consistency_result.overall_score:.3f}, "
+                           f"natural_motion={motion_consistency_result.is_natural_motion}, "
+                           f"pattern_score={motion_consistency_result.pattern_score:.3f}, "
+                           f"edge_score={motion_consistency_result.edge_score:.3f}, "
+                           f"blur_score={motion_consistency_result.blur_score:.3f}")
+                
+            except Exception as e:
+                logger.warning(f"Motion consistency analysis failed: {e}")
+                motion_consistency_result = None
+                motion_consistency_passed = True  # Don't fail validation due to analysis error
+        else:
+            logger.info("Insufficient frames for motion consistency analysis")
         
         if len(nose_positions_with_time) < 5:
             return {
@@ -849,9 +955,10 @@ class SimpleLivenessDetector:
                 'error': 'Insufficient face detection in video - could not track head movement reliably',
                 'processed_frames': int(len(nose_positions_with_time)),
                 'total_frames_processed': int(total_frames),
-                'method': 'Enhanced Anti-Spoofing + Head Movement',
+                'method': 'Enhanced Anti-Spoofing + Head Movement + Motion Consistency',
                 'anti_spoofing': avg_anti_spoofing,
                 'anti_spoof_passed': anti_spoof_passed,
+                'motion_consistency_passed': motion_consistency_passed,
                 'face_saved': face_saved,
                 'face_image_path': face_image_path
             }
@@ -890,28 +997,64 @@ class SimpleLivenessDetector:
                        f"total_frame_processing_time: {total_frame_processing_time:.3f}s, "
                        f"avg_time_per_frame: {total_frame_processing_time/total_frames if total_frames > 0 else 0:.3f}s")
             
+            # Prepare motion consistency results for fallback case
+            motion_consistency_details = {}
+            if motion_consistency_result:
+                motion_consistency_details = {
+                    'overall_score': float(motion_consistency_result.overall_score),
+                    'pattern_score': float(motion_consistency_result.pattern_score),
+                    'edge_score': float(motion_consistency_result.edge_score),
+                    'blur_score': float(motion_consistency_result.blur_score),
+                    'is_natural_motion': bool(motion_consistency_result.is_natural_motion),
+                    'confidence': float(motion_consistency_result.confidence),
+                    'details': motion_consistency_result.details
+                }
+            
+            # Update overall passed to include motion consistency
+            overall_passed = movement_passed and anti_spoof_passed and motion_consistency_passed
+            
             return {
                 'success': True,
                 'passed': bool(overall_passed),
                 'challenge_type': 'head_movement',
                 'details': converted_analysis,
                 'processed_frames': int(len(nose_positions_with_time)),
-                'method': 'Enhanced Anti-Spoofing + Head Movement',
+                'method': 'Enhanced Anti-Spoofing + Head Movement + Motion Consistency',
                 'anti_spoofing': avg_anti_spoofing,
                 'anti_spoof_passed': anti_spoof_passed,
                 'movement_passed': movement_passed,
+                'motion_consistency': motion_consistency_details,
+                'motion_consistency_passed': motion_consistency_passed,
                 'face_saved': face_saved,
                 'face_image_path': face_image_path,
                 'frame_processing_time': total_frame_processing_time,
                 'movement_analysis_time': movement_analysis_duration
             }
         
-        # Validate specific directional sequence
-        sequence_validation = self._validate_movement_sequence(nose_positions_with_time, movement_sequence)
+        # Calculate adaptive thresholds based on the best face frame and quality
+        adaptive_thresholds = None
+        if best_face_frame is not None and results.multi_face_landmarks:
+            try:
+                # Use the last detected face landmarks for threshold calculation
+                adaptive_thresholds = self._get_adaptive_thresholds(best_face_frame, results.multi_face_landmarks[0])
+                logger.info(f"Using adaptive thresholds: min_movement={adaptive_thresholds.get('min_movement_threshold', 'N/A'):.1f}, "
+                           f"face_scale={adaptive_thresholds.get('face_scale_factor', 'N/A'):.2f}, "
+                           f"quality_scale={adaptive_thresholds.get('quality_scale_factor', 'N/A'):.2f}")
+            except Exception as e:
+                logger.warning(f"Failed to calculate adaptive thresholds: {e}")
+                adaptive_thresholds = None
         
-        # Overall validation requires both sequence and anti-spoofing to pass
+        # Calculate frame context for confidence scoring
+        frame_context = None
+        if best_face_frame is not None:
+            frame_context = self._calculate_video_quality_metrics(best_face_frame)
+        
+        # Validate specific directional sequence
+        sequence_validation = self._validate_movement_sequence(nose_positions_with_time, movement_sequence, adaptive_thresholds, frame_context)
+        
+        # Overall validation requires sequence, anti-spoofing, and motion consistency to pass
         sequence_passed = sequence_validation['passed']
-        overall_passed = sequence_passed and anti_spoof_passed
+        overall_passed = sequence_passed and anti_spoof_passed and motion_consistency_passed
         
         # Convert all numpy types in sequence validation
         converted_validation = {}
@@ -931,6 +1074,19 @@ class SimpleLivenessDetector:
             else:
                 converted_validation[key] = value
         
+        # Prepare motion consistency results for return
+        motion_consistency_details = {}
+        if motion_consistency_result:
+            motion_consistency_details = {
+                'overall_score': float(motion_consistency_result.overall_score),
+                'pattern_score': float(motion_consistency_result.pattern_score),
+                'edge_score': float(motion_consistency_result.edge_score),
+                'blur_score': float(motion_consistency_result.blur_score),
+                'is_natural_motion': bool(motion_consistency_result.is_natural_motion),
+                'confidence': float(motion_consistency_result.confidence),
+                'details': motion_consistency_result.details
+            }
+        
         return {
             'success': True,
             'passed': bool(overall_passed),
@@ -940,10 +1096,12 @@ class SimpleLivenessDetector:
             'sequence_accuracy': float(converted_validation['accuracy']),
             'processed_frames': int(len(nose_positions_with_time)),
             'details': converted_validation,
-            'method': 'Enhanced Anti-Spoofing + Head Movement',
+            'method': 'Enhanced Anti-Spoofing + Head Movement + Motion Consistency',
             'anti_spoofing': avg_anti_spoofing,
             'anti_spoof_passed': anti_spoof_passed,
             'sequence_passed': sequence_passed,
+            'motion_consistency': motion_consistency_details,
+            'motion_consistency_passed': motion_consistency_passed,
             'face_saved': face_saved,
             'face_image_path': face_image_path
         }
@@ -978,17 +1136,49 @@ class SimpleLivenessDetector:
         return 0.0
     
     def _get_nose_position(self, face_landmarks, frame_shape: Tuple[int, int, int]) -> Optional[Tuple[float, float]]:
-        """Get normalized nose position."""
+        """Get normalized nose position with proper coordinate validation."""
         h, w = frame_shape[:2]
         
         nose_tip = face_landmarks.landmark[self.head_landmarks['nose_tip']]
         
         # Validate nose position is within reasonable bounds
+        # MediaPipe returns normalized coordinates [0, 1]
         if 0 <= nose_tip.x <= 1 and 0 <= nose_tip.y <= 1:
             return (nose_tip.x, nose_tip.y)  # Return normalized coordinates
         else:
             logger.warning(f"Invalid nose position detected: x={nose_tip.x}, y={nose_tip.y}")
             return None
+    
+    def _normalize_coordinates(self, x: float, y: float, frame_width: int, frame_height: int) -> Tuple[float, float]:
+        """Normalize pixel coordinates to [0, 1] range."""
+        return (x / frame_width, y / frame_height)
+    
+    def _denormalize_coordinates(self, norm_x: float, norm_y: float, frame_width: int, frame_height: int) -> Tuple[float, float]:
+        """Convert normalized coordinates back to pixel coordinates."""
+        return (norm_x * frame_width, norm_y * frame_height)
+    
+    def _calculate_movement_magnitude(self, start_pos: Dict, end_pos: Dict, frame_width: int = 640, frame_height: int = 480) -> Dict:
+        """Calculate movement magnitude and direction with proper coordinate handling."""
+        # Calculate deltas in normalized coordinates
+        dx_norm = end_pos['x'] - start_pos['x']
+        dy_norm = end_pos['y'] - start_pos['y']
+        
+        # Convert to pixel coordinates for magnitude calculation
+        dx_pixels = dx_norm * frame_width
+        dy_pixels = dy_norm * frame_height
+        
+        # Calculate magnitude
+        magnitude = np.sqrt(dx_pixels**2 + dy_pixels**2)
+        
+        return {
+            'dx_norm': dx_norm,
+            'dy_norm': dy_norm,
+            'dx_pixels': dx_pixels,
+            'dy_pixels': dy_pixels,
+            'magnitude': magnitude,
+            'abs_dx': abs(dx_pixels),
+            'abs_dy': abs(dy_pixels)
+        }
     
     def _analyze_basic_head_movement(self, nose_positions_with_time: List[Dict]) -> Dict:
         """Analyze basic head movement patterns (backward compatibility)."""
@@ -1205,8 +1395,19 @@ class SimpleLivenessDetector:
         
         return str(most_common_direction), float(final_confidence)
 
-    def _validate_movement_sequence(self, nose_positions_with_time: List[Dict], expected_sequence: List[str]) -> Dict:
-        """Validate that head movement follows the expected directional sequence by detecting all movements and finding matches."""
+    def _validate_movement_sequence(self, nose_positions_with_time: List[Dict], expected_sequence: List[str], adaptive_thresholds: Optional[Dict[str, float]] = None, frame_context: Optional[Dict[str, Any]] = None) -> Dict:
+        """
+        Enhanced flexible sequence validation algorithm that replaces rigid time-based segmentation.
+        Uses advanced sliding window analysis to detect required sequence anywhere in the video
+        with comprehensive tolerance for extra movements, timing variations, pauses, and speed differences.
+        
+        This implementation addresses requirements:
+        - 2.1: Timing variation tolerance
+        - 2.2: Extra movement filtering  
+        - 2.3: Pause tolerance
+        - 2.4: Speed adaptation
+        - 2.5: Sequence detection anywhere in video
+        """
         if not nose_positions_with_time or not expected_sequence:
             return {
                 'passed': False,
@@ -1215,8 +1416,8 @@ class SimpleLivenessDetector:
                 'error': 'Insufficient data for sequence validation'
             }
         
-        # Detect all significant movements throughout the video
-        all_movements = self._detect_all_movements(nose_positions_with_time)
+        # Detect all significant movements throughout the video using adaptive thresholds
+        all_movements = self._detect_all_movements(nose_positions_with_time, adaptive_thresholds, frame_context)
         
         if not all_movements:
             logger.info("No significant movements detected in video")
@@ -1229,105 +1430,125 @@ class SimpleLivenessDetector:
         
         logger.info(f"Detected {len(all_movements)} significant movements: {[m['direction'] for m in all_movements]}")
         
-        # Find any sequence of 4 consecutive movements that matches the expected sequence
-        best_match = self._find_best_sequence_match(all_movements, expected_sequence)
+        # Use the enhanced flexible sequence validator for comprehensive validation
+        validation_result = self.sequence_validator.validate_sequence(all_movements, expected_sequence)
         
-        if best_match['found']:
-            logger.info(f"Found matching sequence! Matched movements: {best_match['matched_movements']}")
-            logger.info(f"Sequence accuracy: {best_match['accuracy']:.3f}")
+        # Log detailed validation results
+        if validation_result['passed']:
+            logger.info(f"✓ Sequence validation PASSED using {validation_result['validation_strategy']} strategy")
+            logger.info(f"  Accuracy: {validation_result['accuracy']:.3f}")
+            logger.info(f"  Matched sequence: {validation_result['detected_sequence']}")
             
-            return {
-                'passed': True,
-                'accuracy': float(best_match['accuracy']),
-                'detected_sequence': best_match['matched_movements'],
-                'expected_sequence': expected_sequence,
-                'all_movements': [m['direction'] for m in all_movements],
-                'best_match_start_index': best_match['start_index'],
-                'best_match_end_index': best_match['end_index'],
-                'total_movements_detected': len(all_movements)
-            }
+            # Log flexibility features used
+            flexibility = validation_result.get('flexibility_features', {})
+            if flexibility.get('timing_variations_handled'):
+                logger.info("  ✓ Handled timing variations")
+            if flexibility.get('extra_movements_filtered'):
+                logger.info(f"  ✓ Filtered {validation_result['match_details']['extra_movements_ignored']} extra movements")
+            if flexibility.get('pause_tolerance_applied'):
+                logger.info("  ✓ Applied pause tolerance")
+            if flexibility.get('speed_adaptation_applied'):
+                logger.info("  ✓ Applied speed adaptation")
+            if flexibility.get('sequence_found_anywhere'):
+                logger.info("  ✓ Found sequence anywhere in video (not just at start)")
         else:
-            logger.info(f"No matching sequence found. All detected movements: {[m['direction'] for m in all_movements]}")
-            logger.info(f"Expected sequence: {expected_sequence}")
+            logger.info(f"✗ Sequence validation FAILED: {validation_result.get('error', 'Unknown reason')}")
+            logger.info(f"  Expected: {expected_sequence}")
+            logger.info(f"  Detected: {validation_result['detected_sequence']}")
             
-            # Fallback: check if there's any partial match
-            partial_match = self._find_partial_match(all_movements, expected_sequence)
-            if partial_match:
-                logger.info(f"Best partial match: {partial_match['matched']}/{len(expected_sequence)} movements")
-            
-            return {
-                'passed': False,
-                'accuracy': 0.0,
-                'detected_sequence': [m['direction'] for m in all_movements],
-                'expected_sequence': expected_sequence,
-                'all_movements': [m['direction'] for m in all_movements],
-                'total_movements_detected': len(all_movements),
-                'partial_match': partial_match
-            }
+            # Log failure analysis if available
+            failure_analysis = validation_result.get('failure_analysis', {})
+            if failure_analysis:
+                logger.info(f"  Failure analysis: {failure_analysis.get('reason', 'No details')}")
+        
+        return validation_result
     
-    def _detect_movement_direction(self, segment_positions: List[Dict]) -> Tuple[str, float]:
-        """Detect the primary movement direction in a time segment."""
+    def _detect_movement_direction(self, segment_positions: List[Dict], adaptive_thresholds: Optional[Dict[str, float]] = None, frame_context: Optional[Dict[str, Any]] = None) -> Tuple[str, float]:
+        """Detect the primary movement direction in a time segment with comprehensive confidence scoring."""
         if len(segment_positions) < 3:
             return 'none', 0.0
+        
+        # Use adaptive thresholds if provided, otherwise use base configuration
+        if adaptive_thresholds is None:
+            adaptive_thresholds = self.adaptive_calculator._get_base_thresholds()
         
         # Calculate overall movement from start to end
         start_pos = segment_positions[0]
         end_pos = segment_positions[-1]
         
-        # Calculate movement deltas
+        # Calculate movement deltas in normalized coordinates
         dx = end_pos['x'] - start_pos['x']
         dy = end_pos['y'] - start_pos['y']
         
-        # Convert to pixel coordinates for better thresholds
-        dx_pixels = dx * 640
-        dy_pixels = dy * 480
+        # Convert to pixel coordinates using adaptive frame scaling
+        frame_scale_x = adaptive_thresholds.get('frame_scale_x', 1.0)
+        frame_scale_y = adaptive_thresholds.get('frame_scale_y', 1.0)
+        dx_pixels = dx * self.movement_config.base_frame_width * frame_scale_x
+        dy_pixels = dy * self.movement_config.base_frame_height * frame_scale_y
         
         # Determine primary direction based on largest movement
         abs_dx = abs(dx_pixels)
         abs_dy = abs(dy_pixels)
         
-        # Minimum movement threshold (pixels) - more sensitive for better detection
-        min_movement = 10
+        # Use adaptive minimum movement threshold
+        min_movement = adaptive_thresholds.get('min_movement_threshold', self.movement_config.min_movement_threshold)
         
         if abs_dx < min_movement and abs_dy < min_movement:
             return 'none', 0.0
         
-        # Also check for consistent movement trend over time
-        if len(segment_positions) >= 5:
-            # Calculate movement trend by looking at first half vs second half
-            mid_point = len(segment_positions) // 2
-            first_half_dx = (segment_positions[mid_point]['x'] - segment_positions[0]['x']) * 640
-            second_half_dx = (segment_positions[-1]['x'] - segment_positions[mid_point]['x']) * 640
-            first_half_dy = (segment_positions[mid_point]['y'] - segment_positions[0]['y']) * 480
-            second_half_dy = (segment_positions[-1]['y'] - segment_positions[mid_point]['y']) * 480
-            
-            # Check if movement is consistent (same direction in both halves)
-            consistent_x = (first_half_dx * second_half_dx) > 0
-            consistent_y = (first_half_dy * second_half_dy) > 0
-            
-            # Boost confidence if movement is consistent
-            consistency_boost = 1.2 if (consistent_x or consistent_y) else 1.0
-        else:
-            consistency_boost = 1.0
+        # Use the new coordinate handling method for better accuracy
+        movement_data = self._calculate_movement_magnitude(start_pos, end_pos, 
+                                                         int(self.movement_config.base_frame_width * frame_scale_x),
+                                                         int(self.movement_config.base_frame_height * frame_scale_y))
         
-        # Determine direction
-        if abs_dx > abs_dy:
-            # Horizontal movement - flip for camera mirror effect
-            # When user moves left, camera sees them move right (dx > 0), so we flip it
-            if dx_pixels > 0:
-                direction = 'left'  # User moved left (camera saw right movement)
+        # Determine direction with proper coordinate system handling
+        if movement_data['abs_dx'] > movement_data['abs_dy']:
+            # Horizontal movement - FIXED: Correct directional mapping
+            # MediaPipe coordinates: when user moves right, x increases (dx > 0)
+            # When user moves left, x decreases (dx < 0)
+            if movement_data['dx_pixels'] > 0:
+                direction = 'right'  # User moved right (x increased)
             else:
-                direction = 'right'  # User moved right (camera saw left movement)
-            confidence = min(abs_dx / 80 * consistency_boost, 1.0)  # Scale confidence based on movement magnitude
+                direction = 'left'   # User moved left (x decreased)
         else:
-            # Vertical movement
-            if dy_pixels > 0:
-                direction = 'down'
+            # Vertical movement - MediaPipe y increases downward
+            if movement_data['dy_pixels'] > 0:
+                direction = 'down'   # User moved down (y increased)
             else:
-                direction = 'up'
-            confidence = min(abs_dy / 80 * consistency_boost, 1.0)
+                direction = 'up'     # User moved up (y decreased)
         
-        return str(direction), float(confidence)
+        # Prepare movement data for comprehensive confidence scoring
+        movement_info = {
+            'direction': direction,
+            'magnitude': movement_data['magnitude'],
+            'dx_pixels': movement_data['dx_pixels'],
+            'dy_pixels': movement_data['dy_pixels'],
+            'dx_norm': movement_data['dx_norm'],
+            'dy_norm': movement_data['dy_norm'],
+            'timestamp': end_pos.get('timestamp', time.time()),
+            'start_position': (start_pos['x'], start_pos['y']),
+            'end_position': (end_pos['x'], end_pos['y']),
+            'frame_indices': (0, len(segment_positions) - 1)
+        }
+        
+        # Get historical movements for consistency analysis
+        historical_movements = []
+        if hasattr(self, '_recent_movements'):
+            historical_movements = self._recent_movements[-10:]  # Last 10 movements
+        
+        # Calculate comprehensive confidence score
+        enhanced_movement = self.confidence_scorer.calculate_comprehensive_confidence(
+            movement_info, frame_context, historical_movements
+        )
+        
+        # Store movement for future consistency analysis
+        if not hasattr(self, '_recent_movements'):
+            self._recent_movements = []
+        self._recent_movements.append(movement_info)
+        if len(self._recent_movements) > 20:  # Keep only recent movements
+            self._recent_movements = self._recent_movements[-20:]
+        
+        return str(direction), float(enhanced_movement.confidence)
 
     def _analyze_head_movement(self, nose_positions: List[Tuple[float, float]]) -> Dict:
         """Analyze head movement patterns."""
@@ -1372,166 +1593,164 @@ class SimpleLivenessDetector:
             'smoothness': total_movement / len(nose_positions) if nose_positions else 0
         }
 
-    def _detect_all_movements(self, nose_positions_with_time: List[Dict]) -> List[Dict]:
-        """Detect all significant movements throughout the video."""
+    def _detect_all_movements(self, nose_positions_with_time: List[Dict], adaptive_thresholds: Optional[Dict[str, float]] = None, frame_context: Optional[Dict[str, Any]] = None) -> List[Dict]:
+        """Detect all significant movements throughout the video with comprehensive confidence scoring."""
         if len(nose_positions_with_time) < 10:
             return []
         
-        movements = []
-        window_size = 15  # Analyze 15 frames at a time (about 0.5 seconds at 30fps)
-        min_movement_threshold = 15  # Minimum pixel movement to be considered significant
+        # Use adaptive thresholds if provided, otherwise use base configuration
+        if adaptive_thresholds is None:
+            adaptive_thresholds = self.adaptive_calculator._get_base_thresholds()
         
-        for i in range(0, len(nose_positions_with_time) - window_size, window_size // 2):  # 50% overlap
+        # Reset confidence scorer for new video analysis
+        self.confidence_scorer.reset_temporal_state()
+        
+        movements = []
+        enhanced_movements = []
+        window_size = self.movement_config.window_size  # Configurable window size
+        min_movement_threshold = adaptive_thresholds.get('significant_movement_threshold', self.movement_config.significant_movement_threshold)
+        step_size = max(1, int(window_size * self.movement_config.step_size_ratio))  # Configurable step size
+        
+        # Get frame scaling factors
+        frame_scale_x = adaptive_thresholds.get('frame_scale_x', 1.0)
+        frame_scale_y = adaptive_thresholds.get('frame_scale_y', 1.0)
+        frame_width = int(self.movement_config.base_frame_width * frame_scale_x)
+        frame_height = int(self.movement_config.base_frame_height * frame_scale_y)
+        
+        for i in range(0, len(nose_positions_with_time) - window_size, step_size):
             window_positions = nose_positions_with_time[i:i + window_size]
             
             if len(window_positions) < 5:
                 continue
             
-            # Calculate movement from start to end of window
+            # Calculate movement using the new coordinate handling method
             start_pos = window_positions[0]
             end_pos = window_positions[-1]
             
-            dx = (end_pos['x'] - start_pos['x']) * 640
-            dy = (end_pos['y'] - start_pos['y']) * 480
+            movement_data = self._calculate_movement_magnitude(start_pos, end_pos, frame_width, frame_height)
             
-            abs_dx = abs(dx)
-            abs_dy = abs(dy)
+            # Validate movement magnitude using the validation config
+            is_valid, validation_reason = self.validation_config.validate_movement_magnitude(
+                movement_data['magnitude'], 
+                (frame_width, frame_height), 
+                adaptive_thresholds
+            )
             
-            # Only consider significant movements
-            if abs_dx < min_movement_threshold and abs_dy < min_movement_threshold:
+            if not is_valid:
                 continue
             
-            # Determine direction
-            if abs_dx > abs_dy:
-                # Horizontal movement - flip for camera mirror effect
-                if dx > 0:
-                    direction = 'left'  # User moved left (camera saw right movement)
+            # Determine direction with proper coordinate system handling
+            if movement_data['abs_dx'] > movement_data['abs_dy']:
+                # Horizontal movement - FIXED: Correct directional mapping
+                # MediaPipe coordinates: when user moves right, x increases (dx > 0)
+                # When user moves left, x decreases (dx < 0)
+                if movement_data['dx_pixels'] > 0:
+                    direction = 'right'  # User moved right (x increased)
                 else:
-                    direction = 'right'  # User moved right (camera saw left movement)
-                confidence = min(abs_dx / 100, 1.0)
+                    direction = 'left'   # User moved left (x decreased)
             else:
-                # Vertical movement
-                if dy > 0:
-                    direction = 'down'
+                # Vertical movement - MediaPipe y increases downward
+                if movement_data['dy_pixels'] > 0:
+                    direction = 'down'   # User moved down (y increased)
                 else:
-                    direction = 'up'
-                confidence = min(abs_dy / 100, 1.0)
+                    direction = 'up'     # User moved up (y decreased)
+            
+            # Prepare movement data for comprehensive confidence scoring
+            movement_info = {
+                'direction': direction,
+                'magnitude': movement_data['magnitude'],
+                'dx_pixels': movement_data['dx_pixels'],
+                'dy_pixels': movement_data['dy_pixels'],
+                'dx_norm': movement_data['dx_norm'],
+                'dy_norm': movement_data['dy_norm'],
+                'timestamp': end_pos.get('timestamp', time.time()),
+                'start_position': (start_pos['x'], start_pos['y']),
+                'end_position': (end_pos['x'], end_pos['y']),
+                'frame_indices': (i, i + window_size)
+            }
+            
+            # Calculate comprehensive confidence score
+            enhanced_movement = self.confidence_scorer.calculate_comprehensive_confidence(
+                movement_info, frame_context, movements
+            )
             
             # Only add if confidence is high enough
-            if confidence > 0.3:
-                movements.append({
-                    'direction': direction,
-                    'confidence': confidence,
+            if enhanced_movement.confidence > self.movement_config.min_confidence_threshold:
+                # Convert enhanced movement back to dictionary format for compatibility
+                movement_dict = {
+                    'direction': enhanced_movement.direction,
+                    'confidence': enhanced_movement.confidence,
                     'start_time': start_pos['timestamp'],
                     'end_time': end_pos['timestamp'],
-                    'magnitude': max(abs_dx, abs_dy),
+                    'magnitude': enhanced_movement.magnitude,
                     'start_index': i,
-                    'end_index': i + window_size
-                })
+                    'end_index': i + window_size,
+                    'dx_pixels': enhanced_movement.dx_pixels,
+                    'dy_pixels': enhanced_movement.dy_pixels,
+                    'dx_norm': enhanced_movement.dx_norm,
+                    'dy_norm': enhanced_movement.dy_norm,
+                    'raw_confidence': enhanced_movement.raw_confidence,
+                    'temporal_confidence': enhanced_movement.temporal_confidence,
+                    'consistency_score': enhanced_movement.consistency_score
+                }
+                
+                movements.append(movement_dict)
+                enhanced_movements.append(enhanced_movement)
         
-        # Filter out movements that are too close together (within 0.5 seconds)
+        # Apply confidence-based filtering using the comprehensive scoring system
+        filtered_enhanced_movements = self.confidence_scorer.filter_movements_by_confidence(enhanced_movements)
+        
+        # Convert filtered enhanced movements back to dictionary format
         filtered_movements = []
-        for i, movement in enumerate(movements):
+        for enhanced_mov in filtered_enhanced_movements:
+            movement_dict = {
+                'direction': enhanced_mov.direction,
+                'confidence': enhanced_mov.confidence,
+                'start_time': enhanced_mov.timestamp,
+                'end_time': enhanced_mov.timestamp,
+                'magnitude': enhanced_mov.magnitude,
+                'start_index': enhanced_mov.frame_indices[0],
+                'end_index': enhanced_mov.frame_indices[1],
+                'dx_pixels': enhanced_mov.dx_pixels,
+                'dy_pixels': enhanced_mov.dy_pixels,
+                'dx_norm': enhanced_mov.dx_norm,
+                'dy_norm': enhanced_mov.dy_norm,
+                'raw_confidence': enhanced_mov.raw_confidence,
+                'temporal_confidence': enhanced_mov.temporal_confidence,
+                'consistency_score': enhanced_mov.consistency_score
+            }
+            filtered_movements.append(movement_dict)
+        
+        # Additional temporal filtering to remove movements that are too close together
+        final_movements = []
+        for i, movement in enumerate(filtered_movements):
             if i == 0:
-                filtered_movements.append(movement)
+                final_movements.append(movement)
                 continue
             
-            time_diff = movement['start_time'] - filtered_movements[-1]['end_time']
-            if time_diff > 0.5:  # At least 0.5 seconds apart
-                filtered_movements.append(movement)
+            time_diff = movement['start_time'] - final_movements[-1]['end_time']
+            direction_diff = movement['direction'] != final_movements[-1]['direction']
+            
+            # Add movement if it's either far enough in time OR in a different direction
+            if time_diff > 0.3 or direction_diff:  # Reduced time threshold and added direction check
+                final_movements.append(movement)
         
-        return filtered_movements
+        logger.info(f"Movement detection summary: {len(movements)} raw movements, "
+                   f"{len(filtered_movements)} after confidence filtering, "
+                   f"{len(final_movements)} after temporal filtering")
+        
+        return final_movements
 
-    def _find_best_sequence_match(self, movements: List[Dict], expected_sequence: List[str]) -> Dict:
-        """Find the best matching sequence of consecutive movements."""
-        if len(movements) < len(expected_sequence):
-            return {'found': False}
-        
-        best_match = {
-            'found': False,
-            'start_index': -1,
-            'end_index': -1,
-            'matched_movements': [],
-            'accuracy': 0.0
-        }
-        
-        # Try all possible starting positions
-        for start_idx in range(len(movements) - len(expected_sequence) + 1):
-            match_count = 0
-            matched_movements = []
-            
-            for i, expected_direction in enumerate(expected_sequence):
-                movement_idx = start_idx + i
-                if movement_idx >= len(movements):
-                    break
-                
-                detected_direction = movements[movement_idx]['direction']
-                if detected_direction == expected_direction:
-                    match_count += 1
-                    matched_movements.append(detected_direction)
-                else:
-                    matched_movements.append(detected_direction)
-            
-            # Check if we have a complete match
-            if match_count == len(expected_sequence):
-                # Calculate accuracy based on confidence scores
-                confidences = [movements[start_idx + i]['confidence'] for i in range(len(expected_sequence))]
-                accuracy = sum(confidences) / len(confidences)
-                
-                if accuracy > best_match['accuracy']:
-                    best_match = {
-                        'found': True,
-                        'start_index': start_idx,
-                        'end_index': start_idx + len(expected_sequence) - 1,
-                        'matched_movements': matched_movements,
-                        'accuracy': accuracy
-                    }
-        
-        return best_match
 
-    def _find_partial_match(self, movements: List[Dict], expected_sequence: List[str]) -> Dict:
-        """Find the best partial match for debugging purposes."""
-        if len(movements) < len(expected_sequence):
-            return None
-        
-        best_partial = {
-            'matched': 0,
-            'start_index': -1,
-            'matched_movements': []
-        }
-        
-        # Try all possible starting positions
-        for start_idx in range(len(movements) - len(expected_sequence) + 1):
-            match_count = 0
-            matched_movements = []
-            
-            for i, expected_direction in enumerate(expected_sequence):
-                movement_idx = start_idx + i
-                if movement_idx >= len(movements):
-                    break
-                
-                detected_direction = movements[movement_idx]['direction']
-                if detected_direction == expected_direction:
-                    match_count += 1
-                matched_movements.append(detected_direction)
-            
-            if match_count > best_partial['matched']:
-                best_partial = {
-                    'matched': match_count,
-                    'start_index': start_idx,
-                    'matched_movements': matched_movements
-                }
-        
-        return best_partial if best_partial['matched'] > 0 else None
 
 
 # Global detector instance
 simple_liveness_detector = None
 
-def initialize_simple_liveness_detector() -> SimpleLivenessDetector:
-    """Initialize global simple liveness detector."""
+def initialize_simple_liveness_detector(movement_config: Optional[MovementThresholdConfig] = None) -> SimpleLivenessDetector:
+    """Initialize global simple liveness detector with optional movement configuration."""
     global simple_liveness_detector
-    simple_liveness_detector = SimpleLivenessDetector()
+    simple_liveness_detector = SimpleLivenessDetector(movement_config)
     return simple_liveness_detector
 
 def get_simple_liveness_detector() -> Optional[SimpleLivenessDetector]:

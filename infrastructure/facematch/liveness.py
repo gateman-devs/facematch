@@ -10,7 +10,12 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import cv2
 import onnxruntime as ort
-from PIL import Image
+from .enhanced_anti_spoofing import (
+    EnhancedAntiSpoofingEngine,
+    AntiSpoofingConfig,
+    create_enhanced_anti_spoofing_engine,
+    create_default_anti_spoofing_config
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -31,6 +36,9 @@ class LivenessDetector:
         self.output_names = None
         self.input_shape = None
         self._initialize_model()
+        
+        # Initialize enhanced anti-spoofing engine
+        self.enhanced_anti_spoofing = create_enhanced_anti_spoofing_engine(create_default_anti_spoofing_config())
     
     def _initialize_model(self) -> None:
         """Initialize ONNX Runtime session for CRMNET model."""
@@ -186,6 +194,80 @@ class LivenessDetector:
         """Apply softmax to logits."""
         exp_logits = np.exp(logits - np.max(logits))
         return exp_logits / np.sum(exp_logits)
+    
+    def detect_liveness_with_enhanced_anti_spoofing(self, face_image: np.ndarray) -> Dict:
+        """
+        Detect liveness with enhanced anti-spoofing analysis.
+        
+        Args:
+            face_image: Face region image
+            
+        Returns:
+            Combined liveness and anti-spoofing results
+        """
+        try:
+            # Perform CRMNET-based liveness detection
+            crmnet_result = self.detect_liveness(face_image)
+            
+            # Perform enhanced anti-spoofing analysis
+            anti_spoof_result = self.enhanced_anti_spoofing.analyze_frame(face_image)
+            
+            # Combine results with weighted scoring
+            if crmnet_result['success'] and anti_spoof_result.passed:
+                # Weight CRMNET and enhanced anti-spoofing results
+                combined_score = (crmnet_result['liveness_score'] * 0.6 + 
+                                anti_spoof_result.overall_score * 0.4)
+                
+                # Both systems must agree for high confidence
+                is_live = (crmnet_result['is_live'] and 
+                          anti_spoof_result.passed and 
+                          combined_score > 0.5)
+                
+                confidence = min(crmnet_result['confidence'], anti_spoof_result.confidence)
+                
+                return {
+                    'success': True,
+                    'is_live': is_live,
+                    'liveness_score': combined_score,
+                    'confidence': confidence,
+                    'crmnet_result': crmnet_result,
+                    'enhanced_anti_spoofing': {
+                        'overall_score': anti_spoof_result.overall_score,
+                        'texture_score': anti_spoof_result.texture_score,
+                        'lighting_score': anti_spoof_result.lighting_score,
+                        'color_score': anti_spoof_result.color_score,
+                        'edge_score': anti_spoof_result.edge_score,
+                        'screen_reflection_score': anti_spoof_result.screen_reflection_score,
+                        'passed': anti_spoof_result.passed,
+                        'confidence': anti_spoof_result.confidence,
+                        'analysis_details': anti_spoof_result.analysis_details
+                    }
+                }
+            else:
+                # If either system fails, return failure
+                return {
+                    'success': False,
+                    'is_live': False,
+                    'liveness_score': 0.0,
+                    'confidence': 0.0,
+                    'error': 'Enhanced anti-spoofing validation failed',
+                    'crmnet_result': crmnet_result,
+                    'enhanced_anti_spoofing': {
+                        'overall_score': anti_spoof_result.overall_score,
+                        'passed': anti_spoof_result.passed,
+                        'analysis_details': anti_spoof_result.analysis_details
+                    }
+                }
+                
+        except Exception as e:
+            logger.error(f"Enhanced liveness detection failed: {e}")
+            return {
+                'success': False,
+                'is_live': False,
+                'liveness_score': 0.0,
+                'confidence': 0.0,
+                'error': str(e)
+            }
     
     def detect_liveness_with_quality_check(self, face_image: np.ndarray, min_face_size: int = 64) -> Dict:
         """
