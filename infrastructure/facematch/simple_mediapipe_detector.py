@@ -62,14 +62,17 @@ class SimpleMediaPipeDetector:
             min_tracking_confidence=min_tracking_confidence
         )
         
-        # Landmark indices definition
+        # Landmark indices definition - Updated with more reliable indices
         self.landmarks = {
-            'nose_tip': 1,
-            'chin': 175,
-            'left_eye': 33,
-            'right_eye': 263,
-            'forehead': 10
+            'nose_tip': 1,      # Keep this - it's reliable
+            'chin': 18,         # Use 18 instead of 175
+            'left_eye': 33,     # Good
+            'right_eye': 263,   # Good
+            'forehead': 9       # Use 9 instead of 10
         }
+        
+        # Alternative: Use landmark groups for better reliability
+        self.face_oval = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109]
         
         # Movement detection parameters
         self.base_movement_threshold = movement_threshold
@@ -116,6 +119,64 @@ class SimpleMediaPipeDetector:
         self.min_quality_score = 0.3
         
         logger.info("Enhanced MediaPipe detector initialized")
+    
+    def calibrate_thresholds(self, video_path: str, calibration_frames: int = 60):
+        """Calibrate movement thresholds based on natural head micro-movements"""
+        cap = cv2.VideoCapture(video_path)
+        movements = []
+        
+        frame_count = 0
+        while frame_count < calibration_frames:
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            # Process frame and collect movement data
+            result = self._process_frame(frame, frame_count)
+            if result and result.get('pose'):
+                if self.previous_pose:
+                    dx = result['pose']['x'] - self.previous_pose['x']
+                    dy = result['pose']['y'] - self.previous_pose['y']
+                    magnitude = np.sqrt(dx**2 + dy**2)
+                    movements.append(magnitude)
+                self.previous_pose = result['pose']
+            
+            frame_count += 1
+        
+        cap.release()
+        
+        if movements:
+            # Set threshold at 95th percentile of natural movements
+            self.base_movement_threshold = np.percentile(movements, 95) * 1.5
+            logger.info(f"Calibrated threshold: {self.base_movement_threshold:.4f}")
+        else:
+            logger.warning("No movement data collected during calibration")
+    
+    def _validate_face_detection(self, landmarks, image_shape) -> bool:
+        """Validate that face detection is reliable"""
+        try:
+            # Check minimum number of landmarks
+            if len(landmarks) < 400:  # FaceMesh should have 468 landmarks
+                return False
+                
+            # Check that key landmarks are within frame bounds
+            key_points = [landmarks[i] for i in [1, 33, 263, 18, 9]]
+            for point in key_points:
+                if not (0 <= point.x <= 1 and 0 <= point.y <= 1):
+                    return False
+                    
+            # Check face size is reasonable
+            left_eye = landmarks[33]
+            right_eye = landmarks[263]
+            eye_distance = abs(right_eye.x - left_eye.x)
+            
+            if eye_distance < 0.01 or eye_distance > 0.5:  # Too small or too large
+                return False
+                
+            return True
+            
+        except (IndexError, AttributeError):
+            return False
     
     def get_head_pose(self, landmarks, image_shape) -> Optional[Dict[str, float]]:
         """
@@ -275,6 +336,49 @@ class SimpleMediaPipeDetector:
         self.last_direction = direction
         return direction
     
+    def _detect_direction_improved(self, dx: float, dy: float, magnitude: float) -> str:
+        """Improved direction detection with better angle handling"""
+        
+        # Use dominant axis approach for clearer directions
+        abs_dx = abs(dx)
+        abs_dy = abs(dy)
+        
+        # Require minimum movement ratio to avoid noise
+        min_ratio = 0.3  # Secondary axis should be at least 30% of primary
+        
+        if abs_dx > abs_dy:
+            # Horizontal movement dominant
+            if abs_dy / abs_dx > min_ratio:
+                # Mixed movement - use angle
+                angle = np.arctan2(dy, dx) * 180 / np.pi
+                return self._angle_to_direction(angle)
+            else:
+                # Pure horizontal
+                return 'right' if dx > 0 else 'left'
+        else:
+            # Vertical movement dominant  
+            if abs_dx / abs_dy > min_ratio:
+                # Mixed movement - use angle
+                angle = np.arctan2(dy, dx) * 180 / np.pi
+                return self._angle_to_direction(angle)
+            else:
+                # Pure vertical
+                return 'down' if dy > 0 else 'up'
+
+    def _angle_to_direction(self, angle: float) -> str:
+        """Convert angle to direction with proper quadrant handling"""
+        # Normalize angle to 0-360
+        angle = angle % 360
+        
+        if 315 <= angle or angle < 45:
+            return 'right'
+        elif 45 <= angle < 135:
+            return 'down'
+        elif 135 <= angle < 225:
+            return 'left'
+        else:  # 225 <= angle < 315
+            return 'up'
+    
     def _direction_to_angle(self, direction: str) -> float:
         """
         Convert direction to center angle.
@@ -372,8 +476,8 @@ class SimpleMediaPipeDetector:
             self.pose_history.append(current_pose)
             return None
         
-        # Determine movement direction using angle-based approach
-        direction = self._detect_direction_angle(dx, dy)
+        # Determine movement direction using improved approach
+        direction = self._detect_direction_improved(dx, dy, magnitude)
         
         if self.debug_mode:
             logger.debug(f"Movement detected: {direction} (magnitude={magnitude:.4f}, angle={np.arctan2(dy, dx) * 180 / np.pi:.1f}°)")
@@ -550,6 +654,102 @@ class SimpleMediaPipeDetector:
                 error=str(e)
             )
     
+    def process_video_optimized(self, video_path: str, target_fps: int = 10) -> DetectionResult:
+        """Optimized video processing with frame skipping"""
+        start_time = time.time()
+        movements = []
+        frames_processed = 0
+        
+        try:
+            cap = cv2.VideoCapture(video_path)
+            if not cap.isOpened():
+                return DetectionResult(
+                    success=False,
+                    movements=[],
+                    processing_time=time.time() - start_time,
+                    frames_processed=0,
+                    error="Failed to open video file"
+                )
+            
+            # Get video properties
+            original_fps = cap.get(cv2.CAP_PROP_FPS)
+            frame_skip = max(1, int(original_fps / target_fps))
+            
+            logger.info(f"Processing video optimized: {video_path} (original_fps={original_fps:.1f}, target_fps={target_fps}, frame_skip={frame_skip})")
+            
+            # Reset state
+            self._reset_state()
+            
+            frame_count = 0
+            processed_count = 0
+            
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                
+                self.total_frames += 1
+                
+                # Skip frames to maintain target FPS
+                if frame_count % frame_skip == 0:
+                    # Resize frame for faster processing
+                    height, width = frame.shape[:2]
+                    if width > 640:
+                        scale = 640 / width
+                        new_width = 640
+                        new_height = int(height * scale)
+                        frame = cv2.resize(frame, (new_width, new_height))
+                    
+                    # Process frame
+                    frame_result = self._process_frame(frame, processed_count)
+                    if frame_result:
+                        frames_processed += 1
+                        self.frames_with_face += 1
+                        if frame_result.get('movement'):
+                            movements.append(frame_result['movement'])
+                    
+                    processed_count += 1
+                
+                frame_count += 1
+                
+                # Limit processing for performance
+                if frame_count > 300:  # Max 300 frames
+                    break
+            
+            cap.release()
+            
+            processing_time = time.time() - start_time
+            
+            # Calculate enhanced statistics
+            face_detection_rate = self.frames_with_face / max(self.total_frames, 1)
+            avg_magnitude = np.mean(self.movement_magnitudes) if self.movement_magnitudes else 0
+            avg_face_size = np.mean(self.face_sizes) if self.face_sizes else 0
+            
+            logger.info(f"Optimized video processing completed: {len(movements)} movements in {processing_time:.3f}s")
+            logger.info(f"Statistics: frames={self.total_frames}, faces_detected={self.frames_with_face}, "
+                       f"face_rate={face_detection_rate:.3f}, avg_magnitude={avg_magnitude:.4f}, "
+                       f"avg_face_size={avg_face_size:.4f}")
+            
+            # Log movement summary
+            self.log_movement_summary()
+            
+            return DetectionResult(
+                success=True,
+                movements=movements,
+                processing_time=processing_time,
+                frames_processed=frames_processed
+            )
+            
+        except Exception as e:
+            logger.error(f"Optimized video processing failed: {e}")
+            return DetectionResult(
+                success=False,
+                movements=[],
+                processing_time=time.time() - start_time,
+                frames_processed=frames_processed,
+                error=str(e)
+            )
+    
     def _process_frame(self, frame: np.ndarray, frame_index: int) -> Optional[Dict[str, Any]]:
         """
         Process a single frame.
@@ -574,6 +774,12 @@ class SimpleMediaPipeDetector:
             # Get first face
             face_landmarks = results.multi_face_landmarks[0]
             
+            # Validate face detection
+            if not self._validate_face_detection(face_landmarks.landmark, frame.shape):
+                if self.debug_mode:
+                    logger.debug(f"Face detection unreliable at frame {frame_index}")
+                return None
+
             # Extract head pose
             pose = self.get_head_pose(face_landmarks.landmark, frame.shape)
             if not pose:
@@ -813,6 +1019,106 @@ class SimpleMediaPipeDetector:
             'correct_movements': correct_movements,
             'total_expected': len(expected_sequence)
         }
+
+    def validate_sequence_improved(self, expected_sequence: List[str], tolerance: float = 0.3) -> Dict[str, Any]:
+        """Improved sequence validation with timing tolerance and partial matching"""
+        detected_sequence = self.get_movement_sequence()
+        
+        if not expected_sequence:
+            return {'accuracy': 0.0, 'message': 'No expected sequence provided'}
+        
+        if not detected_sequence:
+            return {'accuracy': 0.0, 'message': 'No movements detected'}
+        
+        # Use dynamic programming for best subsequence match
+        score = self._calculate_sequence_similarity(expected_sequence, detected_sequence)
+        
+        # Calculate timing-based accuracy
+        timing_accuracy = self._validate_movement_timing(expected_sequence, tolerance)
+        
+        # Combined score
+        final_accuracy = (score * 0.7) + (timing_accuracy * 0.3)
+        
+        return {
+            'accuracy': final_accuracy,
+            'sequence_similarity': score,
+            'timing_accuracy': timing_accuracy,
+            'expected_sequence': expected_sequence,
+            'detected_sequence': detected_sequence,
+            'matched_movements': self._find_best_match(expected_sequence, detected_sequence)
+        }
+
+    def _calculate_sequence_similarity(self, expected: List[str], detected: List[str]) -> float:
+        """Calculate similarity between sequences using Longest Common Subsequence"""
+        if not expected or not detected:
+            return 0.0
+        
+        # Dynamic programming LCS
+        m, n = len(expected), len(detected)
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
+        
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                if expected[i-1] == detected[j-1]:
+                    dp[i][j] = dp[i-1][j-1] + 1
+                else:
+                    dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+        
+        lcs_length = dp[m][n]
+        if lcs_length == 0:
+            return 0.0
+        return lcs_length / len(expected)
+    
+    def _validate_movement_timing(self, expected_sequence: List[str], tolerance: float) -> float:
+        """Validate timing of movements relative to expected sequence"""
+        if not self.movement_history or not expected_sequence:
+            return 0.0
+        
+        # Calculate expected timing intervals
+        total_duration = self.movement_history[-1].timestamp - self.movement_history[0].timestamp
+        expected_interval = total_duration / len(expected_sequence)
+        
+        # Check if detected movements are reasonably spaced
+        timing_errors = []
+        for i in range(1, len(self.movement_history)):
+            actual_interval = self.movement_history[i].timestamp - self.movement_history[i-1].timestamp
+            timing_error = abs(actual_interval - expected_interval) / expected_interval
+            timing_errors.append(timing_error)
+        
+        if not timing_errors:
+            return 1.0
+        
+        # Calculate timing accuracy
+        avg_timing_error = np.mean(timing_errors)
+        timing_accuracy = max(0, 1 - avg_timing_error / tolerance)
+        
+        return timing_accuracy
+    
+    def _find_best_match(self, expected: List[str], detected: List[str]) -> List[Dict[str, Any]]:
+        """Find the best matching movements between expected and detected sequences"""
+        matches = []
+        
+        # Simple greedy matching
+        detected_idx = 0
+        for i, expected_move in enumerate(expected):
+            if detected_idx < len(detected):
+                if detected[detected_idx] == expected_move:
+                    matches.append({
+                        'expected_index': i,
+                        'detected_index': detected_idx,
+                        'movement': expected_move,
+                        'matched': True
+                    })
+                    detected_idx += 1
+                else:
+                    matches.append({
+                        'expected_index': i,
+                        'detected_index': -1,
+                        'movement': expected_move,
+                        'matched': False
+                    })
+        
+        return matches
 
 def create_simple_detector(**kwargs) -> SimpleMediaPipeDetector:
     """Create a simple MediaPipe detector with optional parameters."""
