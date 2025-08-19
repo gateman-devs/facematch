@@ -8,6 +8,7 @@ import time
 from typing import Dict, Optional, Any, Union
 from dataclasses import dataclass
 import numpy as np
+import cv2 # Added missing import for cv2
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -110,9 +111,29 @@ class FaceComparisonIntegrator:
                     processing_time=time.time() - start_time
                 )
             
-            # Perform face comparison using ArcFace recognizer
+            # Convert string inputs to numpy arrays if needed
+            face1_array = self._convert_to_numpy_array(image1)
+            face2_array = self._convert_to_numpy_array(image2)
+            
+            if face1_array is None:
+                return self._create_error_result(
+                    error="Failed to convert first image to numpy array",
+                    error_code="IMAGE_CONVERSION_ERROR",
+                    threshold=threshold,
+                    processing_time=time.time() - start_time
+                )
+            
+            if face2_array is None:
+                return self._create_error_result(
+                    error="Failed to convert second image to numpy array",
+                    error_code="IMAGE_CONVERSION_ERROR",
+                    threshold=threshold,
+                    processing_time=time.time() - start_time
+                )
+            
+            # Perform face comparison using ArcFace recognizer with numpy arrays
             comparison_result = self.face_recognizer.compare_faces(
-                image1, image2, threshold
+                face1_array, face2_array, threshold
             )
             
             processing_time = time.time() - start_time
@@ -173,6 +194,42 @@ class FaceComparisonIntegrator:
                 threshold=threshold,
                 processing_time=processing_time
             )
+    
+    def _convert_to_numpy_array(self, image_input: Union[str, np.ndarray]) -> Optional[np.ndarray]:
+        """
+        Convert image input (URL, base64, or numpy array) to numpy array.
+        
+        Args:
+            image_input: Image input (URL, base64, or numpy array)
+            
+        Returns:
+            Numpy array or None if conversion failed
+        """
+        try:
+            # If already a numpy array, return as is
+            if isinstance(image_input, np.ndarray):
+                return image_input
+            
+            # If it's a string, convert to numpy array
+            if isinstance(image_input, str):
+                # Import here to avoid circular imports
+                from .image_utils import image_processor
+                
+                # Use the image processor to convert string to numpy array
+                numpy_array = image_processor.process_image_input(image_input)
+                
+                if numpy_array is not None:
+                    # Convert BGR to RGB if needed (OpenCV uses BGR, but face recognition expects RGB)
+                    if len(numpy_array.shape) == 3 and numpy_array.shape[2] == 3:
+                        numpy_array = cv2.cvtColor(numpy_array, cv2.COLOR_BGR2RGB)
+                
+                return numpy_array
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Failed to convert image input to numpy array: {e}")
+            return None
     
     def integrate_with_liveness_detection(
         self,
