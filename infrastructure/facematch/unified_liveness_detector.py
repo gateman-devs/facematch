@@ -407,10 +407,20 @@ class CRMNETLivenessAdapter(BaseLivenessDetector):
         return self.detector is not None and hasattr(self.detector, 'session')
 
 class VideoLivenessAdapter(BaseLivenessDetector):
-    """Adapter for video-based liveness detector."""
+    """Adapter for video-based liveness detector with MediaPipe support."""
     
     def __init__(self, simple_detector):
         self.detector = simple_detector
+        # Initialize MediaPipe processor
+        try:
+            from .optimized_video_processor import create_optimized_processor
+            self.mediapipe_processor = create_optimized_processor(use_mediapipe=True)
+            self.use_mediapipe = True
+            logger.info("VideoLivenessAdapter initialized with MediaPipe support")
+        except Exception as e:
+            logger.warning(f"Failed to initialize MediaPipe processor: {e}")
+            self.mediapipe_processor = None
+            self.use_mediapipe = False
     
     def detect_liveness(self, input_data: str, **kwargs) -> LivenessResult:
         """Detect liveness in video."""
@@ -427,8 +437,113 @@ class VideoLivenessAdapter(BaseLivenessDetector):
         )
     
     def validate_video_challenge(self, **kwargs) -> Dict[str, Any]:
-        """Validate video challenge using simple detector."""
-        return self.detector.validate_video_challenge(**kwargs)
+        """Validate video challenge using MediaPipe or fallback to simple detector."""
+        try:
+            # Try MediaPipe first if available
+            if self.use_mediapipe and self.mediapipe_processor:
+                logger.info("Using MediaPipe for video challenge validation")
+                return self._validate_with_mediapipe(**kwargs)
+            else:
+                logger.info("Using legacy simple detector for video challenge validation")
+                return self.detector.validate_video_challenge(**kwargs)
+        except Exception as e:
+            logger.warning(f"MediaPipe validation failed, falling back to legacy: {e}")
+            return self.detector.validate_video_challenge(**kwargs)
+    
+    def _validate_with_mediapipe(self, **kwargs) -> Dict[str, Any]:
+        """Validate video challenge using MediaPipe processor."""
+        try:
+            video_path = kwargs.get('video_path')
+            movement_sequence = kwargs.get('movement_sequence')
+            
+            if not video_path:
+                return {
+                    'success': False,
+                    'passed': False,
+                    'error': 'No video path provided',
+                    'confidence': 0.0,
+                    'liveness_score': 0.0
+                }
+            
+            # Process video with MediaPipe
+            result = self.mediapipe_processor.process_video_for_liveness(
+                video_path=video_path,
+                expected_sequence=movement_sequence
+            )
+            
+            if not result.success:
+                return {
+                    'success': False,
+                    'passed': False,
+                    'error': result.error or 'MediaPipe processing failed',
+                    'confidence': 0.0,
+                    'liveness_score': 0.0
+                }
+            
+            # Analyze movements
+            movements = result.movements
+            if not movements:
+                return {
+                    'success': True,
+                    'passed': False,
+                    'error': 'No movements detected',
+                    'confidence': 0.0,
+                    'liveness_score': 0.0,
+                    'detected_sequence': [],
+                    'expected_sequence': movement_sequence,
+                    'sequence_accuracy': 0.0
+                }
+            
+            # Extract movement sequence
+            detected_sequence = [movement['direction'] for movement in movements]
+            
+            # Calculate sequence accuracy if expected sequence provided
+            sequence_accuracy = 0.0
+            if movement_sequence and detected_sequence:
+                correct_movements = 0
+                for i, expected in enumerate(movement_sequence):
+                    if i < len(detected_sequence) and detected_sequence[i] == expected:
+                        correct_movements += 1
+                sequence_accuracy = correct_movements / len(movement_sequence) if movement_sequence else 0.0
+            
+            # Calculate overall confidence
+            movement_confidences = [movement.get('confidence', 0.0) for movement in movements]
+            avg_confidence = sum(movement_confidences) / len(movement_confidences) if movement_confidences else 0.0
+            
+            # Determine if passed (at least 70% accuracy and good confidence)
+            passed = sequence_accuracy >= 0.7 and avg_confidence >= 0.6
+            
+            return {
+                'success': True,
+                'passed': passed,
+                'confidence': avg_confidence,
+                'liveness_score': sequence_accuracy,
+                'detected_sequence': detected_sequence,
+                'expected_sequence': movement_sequence,
+                'sequence_accuracy': sequence_accuracy,
+                'movement_details': {
+                    'total_movements': len(movements),
+                    'movements': movements,
+                    'avg_confidence': avg_confidence,
+                    'processing_time': result.processing_time,
+                    'frames_processed': result.frames_processed
+                },
+                'details': {
+                    'mediapipe_used': True,
+                    'performance_metrics': result.performance_metrics,
+                    'optimization_applied': result.optimization_applied
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"MediaPipe validation failed: {e}")
+            return {
+                'success': False,
+                'passed': False,
+                'error': f'MediaPipe validation error: {str(e)}',
+                'confidence': 0.0,
+                'liveness_score': 0.0
+            }
     
     def generate_challenge(self) -> Dict[str, Any]:
         """Generate movement challenge."""

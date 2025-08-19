@@ -799,7 +799,8 @@ async def match_faces(request: FaceMatchRequest):
 async def process_video_optimized(
     video: UploadFile = File(...),
     expected_sequence: Optional[str] = Form(None),
-    performance_mode: Optional[str] = Form("balanced")
+    performance_mode: Optional[str] = Form("balanced"),
+    use_mediapipe: Optional[bool] = Form(True)
 ):
     """
     Process video for liveness detection with performance optimizations.
@@ -849,7 +850,8 @@ async def process_video_optimized(
             result = await process_video_async(
                 video_path=temp_video_path,
                 expected_sequence=sequence,
-                performance_mode=performance_mode
+                performance_mode=performance_mode,
+                use_mediapipe=use_mediapipe
             )
             
             # Prepare response
@@ -858,7 +860,8 @@ async def process_video_optimized(
                 'processing_time': result.processing_time,
                 'frames_processed': result.frames_processed,
                 'frames_skipped': result.frames_skipped,
-                'performance_mode': performance_mode
+                'performance_mode': performance_mode,
+                'use_mediapipe': use_mediapipe
             }
             
             if result.success:
