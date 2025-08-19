@@ -411,16 +411,29 @@ class VideoLivenessAdapter(BaseLivenessDetector):
     
     def __init__(self, simple_detector):
         self.detector = simple_detector
-        # Initialize MediaPipe processor
+        # Initialize MediaPipe processors
+        self.mediapipe_processor = None
+        self.simple_mediapipe_detector = None
+        self.use_mediapipe = False
+        
         try:
-            from .optimized_video_processor import create_optimized_processor
-            self.mediapipe_processor = create_optimized_processor(use_mediapipe=True)
+            # Try to initialize simple MediaPipe detector first (more reliable)
+            from .simple_mediapipe_detector import create_simple_detector
+            self.simple_mediapipe_detector = create_simple_detector()
             self.use_mediapipe = True
-            logger.info("VideoLivenessAdapter initialized with MediaPipe support")
+            logger.info("VideoLivenessAdapter initialized with simple MediaPipe detector")
         except Exception as e:
-            logger.warning(f"Failed to initialize MediaPipe processor: {e}")
-            self.mediapipe_processor = None
-            self.use_mediapipe = False
+            logger.warning(f"Failed to initialize simple MediaPipe detector: {e}")
+            
+            # Fallback to optimized processor
+            try:
+                from .optimized_video_processor import create_optimized_processor
+                self.mediapipe_processor = create_optimized_processor(use_mediapipe=True)
+                self.use_mediapipe = True
+                logger.info("VideoLivenessAdapter initialized with optimized MediaPipe processor")
+            except Exception as e2:
+                logger.warning(f"Failed to initialize optimized MediaPipe processor: {e2}")
+                self.use_mediapipe = False
     
     def detect_liveness(self, input_data: str, **kwargs) -> LivenessResult:
         """Detect liveness in video."""
@@ -439,9 +452,13 @@ class VideoLivenessAdapter(BaseLivenessDetector):
     def validate_video_challenge(self, **kwargs) -> Dict[str, Any]:
         """Validate video challenge using MediaPipe or fallback to simple detector."""
         try:
-            # Try MediaPipe first if available
-            if self.use_mediapipe and self.mediapipe_processor:
-                logger.info("Using MediaPipe for video challenge validation")
+            # Try simple MediaPipe detector first (more reliable)
+            if self.use_mediapipe and self.simple_mediapipe_detector:
+                logger.info("Using simple MediaPipe detector for video challenge validation")
+                return self._validate_with_simple_mediapipe(**kwargs)
+            # Fallback to optimized MediaPipe processor
+            elif self.use_mediapipe and self.mediapipe_processor:
+                logger.info("Using optimized MediaPipe processor for video challenge validation")
                 return self._validate_with_mediapipe(**kwargs)
             else:
                 logger.info("Using legacy simple detector for video challenge validation")
@@ -449,6 +466,109 @@ class VideoLivenessAdapter(BaseLivenessDetector):
         except Exception as e:
             logger.warning(f"MediaPipe validation failed, falling back to legacy: {e}")
             return self.detector.validate_video_challenge(**kwargs)
+    
+    def _validate_with_simple_mediapipe(self, **kwargs) -> Dict[str, Any]:
+        """Validate video challenge using simple MediaPipe detector."""
+        try:
+            video_path = kwargs.get('video_path')
+            movement_sequence = kwargs.get('movement_sequence')
+            
+            if not video_path:
+                return {
+                    'success': False,
+                    'passed': False,
+                    'error': 'No video path provided',
+                    'confidence': 0.0,
+                    'liveness_score': 0.0
+                }
+            
+            # Process video with simple MediaPipe detector
+            result = self.simple_mediapipe_detector.process_video(
+                video_path=video_path,
+                expected_sequence=movement_sequence
+            )
+            
+            if not result.success:
+                return {
+                    'success': False,
+                    'passed': False,
+                    'error': result.error or 'Simple MediaPipe processing failed',
+                    'confidence': 0.0,
+                    'liveness_score': 0.0
+                }
+            
+            # Analyze movements
+            movements = result.movements
+            if not movements:
+                return {
+                    'success': True,
+                    'passed': False,
+                    'error': 'No movements detected',
+                    'confidence': 0.0,
+                    'liveness_score': 0.0,
+                    'detected_sequence': [],
+                    'expected_sequence': movement_sequence,
+                    'sequence_accuracy': 0.0
+                }
+            
+            # Extract movement sequence
+            detected_sequence = [movement.direction for movement in movements]
+            
+            # Calculate sequence accuracy if expected sequence provided
+            sequence_accuracy = 0.0
+            if movement_sequence and detected_sequence:
+                correct_movements = 0
+                for i, expected in enumerate(movement_sequence):
+                    if i < len(detected_sequence) and detected_sequence[i] == expected:
+                        correct_movements += 1
+                sequence_accuracy = correct_movements / len(movement_sequence) if movement_sequence else 0.0
+            
+            # Calculate overall confidence
+            movement_confidences = [movement.confidence for movement in movements]
+            avg_confidence = sum(movement_confidences) / len(movement_confidences) if movement_confidences else 0.0
+            
+            # Determine if passed (at least 70% accuracy and good confidence)
+            passed = sequence_accuracy >= 0.7 and avg_confidence >= 0.6
+            
+            return {
+                'success': True,
+                'passed': passed,
+                'confidence': avg_confidence,
+                'liveness_score': sequence_accuracy,
+                'detected_sequence': detected_sequence,
+                'expected_sequence': movement_sequence,
+                'sequence_accuracy': sequence_accuracy,
+                'movement_details': {
+                    'total_movements': len(movements),
+                    'movements': [
+                        {
+                            'direction': m.direction,
+                            'confidence': m.confidence,
+                            'magnitude': m.magnitude,
+                            'timestamp': m.timestamp
+                        } for m in movements
+                    ],
+                    'avg_confidence': avg_confidence,
+                    'processing_time': result.processing_time,
+                    'frames_processed': result.frames_processed
+                },
+                'details': {
+                    'mediapipe_used': True,
+                    'simple_detector': True,
+                    'processing_time': result.processing_time,
+                    'frames_processed': result.frames_processed
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Simple MediaPipe validation failed: {e}")
+            return {
+                'success': False,
+                'passed': False,
+                'error': f'Simple MediaPipe validation error: {str(e)}',
+                'confidence': 0.0,
+                'liveness_score': 0.0
+            }
     
     def _validate_with_mediapipe(self, **kwargs) -> Dict[str, Any]:
         """Validate video challenge using MediaPipe processor."""
