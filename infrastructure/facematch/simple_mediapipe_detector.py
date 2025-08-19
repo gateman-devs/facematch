@@ -33,7 +33,10 @@ class DetectionResult:
     error: Optional[str] = None
 
 class SimpleMediaPipeDetector:
-    """Simplified MediaPipe-based head movement detector."""
+    """
+    Enhanced MediaPipe-based head movement detector using FaceMesh with adaptive thresholds,
+    temporal smoothing, and improved direction detection.
+    """
     
     def __init__(self, 
                  min_detection_confidence: float = 0.5,
@@ -42,12 +45,12 @@ class SimpleMediaPipeDetector:
                  max_history: int = 10,
                  debug_mode: bool = False):
         """
-        Initialize the detector.
+        Initialize the detector with enhanced features.
         
         Args:
             min_detection_confidence: Minimum confidence for face detection
-            min_tracking_confidence: Minimum confidence for landmark tracking
-            movement_threshold: Threshold for movement detection (normalized coordinates)
+            min_tracking_confidence: Minimum confidence for face tracking
+            movement_threshold: Base movement magnitude threshold (will be adapted)
             max_history: Maximum number of poses to keep in history
             debug_mode: Enable debug logging for troubleshooting
         """
@@ -59,68 +62,102 @@ class SimpleMediaPipeDetector:
             min_tracking_confidence=min_tracking_confidence
         )
         
-        # Movement detection parameters
-        self.movement_threshold = movement_threshold
-        self.debug_mode = debug_mode
-        self.previous_pose = None
-        self.movement_history = deque(maxlen=max_history)
-        self.pose_history = deque(maxlen=max_history)
-        
-        # Statistics for adaptive threshold
-        self.total_frames = 0
-        self.frames_with_face = 0
-        self.movement_magnitudes = []
-        
-        # Movement cooldown to prevent rapid-fire detections
-        self.last_movement_time = 0
-        self.movement_cooldown = 0.2  # Reduced from 0.3 seconds for more responsive detection
-        
-        # Movement validation state
-        self.initial_face_center = None  # Store initial face position
-        self.face_center_threshold = 0.1  # Threshold for "centered" face
-        self.return_movement_threshold = 0.05  # Threshold for detecting return movements
-        self.last_movement_direction = None  # Track last movement direction
-        self.center_position = None  # Track center position
-        
-        # Key facial landmarks for head pose estimation
+        # Landmark indices definition
         self.landmarks = {
             'nose_tip': 1,
             'chin': 175,
             'left_eye': 33,
             'right_eye': 263,
-            'left_ear': 234,
-            'right_ear': 454,
-            'mouth_center': 13
+            'forehead': 10
         }
         
-        logger.info("Simple MediaPipe detector initialized")
+        # Movement detection parameters
+        self.base_movement_threshold = movement_threshold
+        self.movement_threshold = movement_threshold  # Will be adapted based on face size
+        self.debug_mode = debug_mode
+        self.previous_pose = None
+        self.movement_history = deque(maxlen=max_history)
+        self.pose_history = deque(maxlen=max_history)
+        
+        # Temporal smoothing parameters
+        self.smoothing_weights = [0.1, 0.3, 0.6]  # Weights for last 3 poses
+        self.min_poses_for_smoothing = 3
+        
+        # Direction detection parameters
+        self.direction_angles = {
+            'right': (-45, 45),
+            'down': (45, 135),
+            'left': (135, 225),  # 135 to -135 (225)
+            'up': (225, 315)     # -135 to -45 (315)
+        }
+        self.direction_hysteresis = 10  # Degrees of hysteresis to prevent flipping
+        self.last_direction = None
+        
+        # Statistics for adaptive threshold
+        self.total_frames = 0
+        self.frames_with_face = 0
+        self.movement_magnitudes = []
+        self.face_sizes = []  # Track face sizes for adaptive threshold
+        
+        # Movement cooldown to prevent rapid-fire detections
+        self.last_movement_time = 0
+        self.movement_cooldown = 0.2
+        
+        # Movement validation state
+        self.initial_face_center = None
+        self.face_center_threshold = 0.1
+        self.return_movement_threshold = 0.05
+        self.last_movement_direction = None
+        self.center_position = None
+        
+        # Quality validation parameters
+        self.min_eye_distance = 0.01
+        self.min_face_height = 0.01
+        self.min_quality_score = 0.3
+        
+        logger.info("Enhanced MediaPipe detector initialized")
     
     def get_head_pose(self, landmarks, image_shape) -> Optional[Dict[str, float]]:
         """
-        Calculate head pose from facial landmarks.
+        Calculate enhanced head pose from facial landmarks with quality validation.
         
         Args:
             landmarks: MediaPipe face mesh landmarks
             image_shape: Image dimensions (height, width)
             
         Returns:
-            Head pose data or None if landmarks are invalid
+            Head pose data or None if landmarks are invalid or quality is poor
         """
         try:
-            # Extract key landmarks
+            # Extract key landmarks with error handling
             nose_tip = landmarks[self.landmarks['nose_tip']]
             chin = landmarks[self.landmarks['chin']]
             left_eye = landmarks[self.landmarks['left_eye']]
             right_eye = landmarks[self.landmarks['right_eye']]
+            forehead = landmarks[self.landmarks['forehead']]
             
             # Calculate head center (between eyes)
             x_center = (left_eye.x + right_eye.x) / 2
             y_center = (left_eye.y + right_eye.y) / 2
             
-            # Calculate additional pose metrics
+            # Calculate face metrics
             eye_distance = np.sqrt((right_eye.x - left_eye.x)**2 + (right_eye.y - left_eye.y)**2)
-            face_height = abs(chin.y - nose_tip.y)
+            face_height = abs(chin.y - forehead.y)
             
+            # Quality validation
+            if eye_distance < self.min_eye_distance or face_height < self.min_face_height:
+                if self.debug_mode:
+                    logger.debug(f"Face too small: eye_distance={eye_distance:.4f}, face_height={face_height:.4f}")
+                return None
+            
+            # Calculate normalized pose ratios
+            yaw_ratio = (nose_tip.x - x_center) / (eye_distance + 1e-6)
+            pitch_ratio = (nose_tip.y - y_center) / (face_height + 1e-6)
+            
+            # Calculate quality score based on face size
+            quality_score = min(eye_distance * 10, 1.0)
+            
+            # Enhanced pose data
             pose_data = {
                 'x': x_center,
                 'y': y_center,
@@ -128,8 +165,15 @@ class SimpleMediaPipeDetector:
                 'chin_y': chin.y,
                 'eye_distance': eye_distance,
                 'face_height': face_height,
-                'confidence': 1.0  # Will be updated based on landmark quality
+                'yaw_ratio': yaw_ratio,
+                'pitch_ratio': pitch_ratio,
+                'quality_score': quality_score,
+                'confidence': quality_score
             }
+            
+            # Apply temporal smoothing if we have enough history
+            if len(self.pose_history) >= self.min_poses_for_smoothing:
+                pose_data = self._apply_temporal_smoothing(pose_data)
             
             return pose_data
             
@@ -137,9 +181,121 @@ class SimpleMediaPipeDetector:
             logger.warning(f"Failed to extract head pose: {e}")
             return None
     
+    def _apply_temporal_smoothing(self, current_pose: Dict[str, float]) -> Dict[str, float]:
+        """
+        Apply weighted moving average smoothing to pose coordinates.
+        
+        Args:
+            current_pose: Current pose data
+            
+        Returns:
+            Smoothed pose data
+        """
+        if len(self.pose_history) < self.min_poses_for_smoothing:
+            return current_pose
+        
+        # Get recent poses for smoothing
+        recent_poses = list(self.pose_history)[-self.min_poses_for_smoothing:]
+        
+        # Smooth key coordinates
+        smoothed_pose = current_pose.copy()
+        
+        # Smooth x, y coordinates
+        x_values = [p['x'] for p in recent_poses] + [current_pose['x']]
+        y_values = [p['y'] for p in recent_poses] + [current_pose['y']]
+        
+        smoothed_pose['x'] = np.average(x_values, weights=self.smoothing_weights + [0.6])
+        smoothed_pose['y'] = np.average(y_values, weights=self.smoothing_weights + [0.6])
+        
+        # Smooth pose ratios if available
+        if 'yaw_ratio' in current_pose:
+            yaw_values = [p.get('yaw_ratio', 0) for p in recent_poses] + [current_pose['yaw_ratio']]
+            smoothed_pose['yaw_ratio'] = np.average(yaw_values, weights=self.smoothing_weights + [0.6])
+        
+        if 'pitch_ratio' in current_pose:
+            pitch_values = [p.get('pitch_ratio', 0) for p in recent_poses] + [current_pose['pitch_ratio']]
+            smoothed_pose['pitch_ratio'] = np.average(pitch_values, weights=self.smoothing_weights + [0.6])
+        
+        return smoothed_pose
+    
+    def _calculate_adaptive_threshold(self, eye_distance: float) -> float:
+        """
+        Calculate adaptive movement threshold based on face size.
+        
+        Args:
+            eye_distance: Distance between eyes (face size indicator)
+            
+        Returns:
+            Adaptive movement threshold
+        """
+        # Base threshold adjustment based on face size
+        # Larger faces (closer to camera) need smaller thresholds
+        # Smaller faces (farther from camera) need larger thresholds
+        
+        if eye_distance < 0.05:  # Face far from camera
+            return self.base_movement_threshold * 1.5
+        elif eye_distance > 0.15:  # Face close to camera
+            return self.base_movement_threshold * 0.7
+        else:  # Normal distance
+            return self.base_movement_threshold
+    
+    def _detect_direction_angle(self, dx: float, dy: float) -> str:
+        """
+        Detect movement direction using angle-based approach.
+        
+        Args:
+            dx: X movement component
+            dy: Y movement component
+            
+        Returns:
+            Movement direction
+        """
+        # Calculate movement angle
+        angle = np.arctan2(dy, dx) * 180 / np.pi
+        
+        # Normalize angle to 0-360 range
+        if angle < 0:
+            angle += 360
+        
+        # Determine direction based on angle ranges
+        direction = None
+        for dir_name, (start_angle, end_angle) in self.direction_angles.items():
+            if start_angle <= angle < end_angle:
+                direction = dir_name
+                break
+        
+        # Apply hysteresis to prevent direction flipping
+        if self.last_direction and direction != self.last_direction:
+            # Check if the angle change is small (within hysteresis range)
+            last_angle = self._direction_to_angle(self.last_direction)
+            angle_diff = abs(angle - last_angle)
+            if angle_diff < self.direction_hysteresis:
+                direction = self.last_direction  # Keep previous direction
+        
+        self.last_direction = direction
+        return direction
+    
+    def _direction_to_angle(self, direction: str) -> float:
+        """
+        Convert direction to center angle.
+        
+        Args:
+            direction: Movement direction
+            
+        Returns:
+            Center angle for the direction
+        """
+        direction_centers = {
+            'right': 0,
+            'down': 90,
+            'left': 180,
+            'up': 270
+        }
+        return direction_centers.get(direction, 0)
+    
     def detect_movement(self, current_pose: Dict[str, float], timestamp: float) -> Optional[MovementResult]:
         """
-        Detect movement between current and previous pose.
+        Detect movement between current and previous pose with enhanced logic.
         
         Args:
             current_pose: Current head pose data
@@ -148,6 +304,12 @@ class SimpleMediaPipeDetector:
         Returns:
             Movement result or None if no significant movement
         """
+        # Quality validation
+        if current_pose.get('quality_score', 0) < self.min_quality_score:
+            if self.debug_mode:
+                logger.debug(f"Pose quality too low: {current_pose.get('quality_score', 0):.3f}")
+            return None
+        
         if self.previous_pose is None:
             self.previous_pose = current_pose
             self.pose_history.append(current_pose)
@@ -162,11 +324,17 @@ class SimpleMediaPipeDetector:
         # Calculate movement magnitude
         magnitude = np.sqrt(dx**2 + dy**2)
         
-        # Store magnitude for adaptive threshold
+        # Update adaptive threshold based on face size
+        eye_distance = current_pose.get('eye_distance', 0.1)
+        self.movement_threshold = self._calculate_adaptive_threshold(eye_distance)
+        
+        # Store statistics
         self.movement_magnitudes.append(magnitude)
+        self.face_sizes.append(eye_distance)
         
         if self.debug_mode:
-            logger.debug(f"Movement: dx={dx:.4f}, dy={dy:.4f}, magnitude={magnitude:.4f}, threshold={self.movement_threshold:.4f}")
+            logger.debug(f"Movement: dx={dx:.4f}, dy={dy:.4f}, magnitude={magnitude:.4f}, "
+                        f"threshold={self.movement_threshold:.4f}, eye_distance={eye_distance:.4f}")
         
         # Check if movement exceeds threshold
         if magnitude < self.movement_threshold:
@@ -175,14 +343,14 @@ class SimpleMediaPipeDetector:
             return None
         
         # Additional filtering: check for minimum significant movement
-        min_significant_movement = self.movement_threshold * 1.1  # Reduced from 1.2
+        min_significant_movement = self.movement_threshold * 1.1
         if magnitude < min_significant_movement:
             # Only count as movement if it's part of a pattern
             if len(self.movement_history) > 0:
                 last_movement = self.movement_history[-1]
                 time_diff = timestamp - last_movement.timestamp
                 # If this is a continuation of recent movement, allow it
-                if time_diff < 0.8:  # Increased from 0.5 seconds for more lenient pattern detection
+                if time_diff < 0.8:
                     pass  # Allow the movement
                 else:
                     # Too small and isolated, skip
@@ -191,7 +359,7 @@ class SimpleMediaPipeDetector:
                     return None
             else:
                 # First movement should be more significant but not too restrictive
-                if magnitude < min_significant_movement * 1.2:  # Reduced from 1.5
+                if magnitude < min_significant_movement * 1.2:
                     self.previous_pose = current_pose
                     self.pose_history.append(current_pose)
                     return None
@@ -204,15 +372,11 @@ class SimpleMediaPipeDetector:
             self.pose_history.append(current_pose)
             return None
         
-        # Determine movement direction
-        direction = None
-        if abs(dx) > abs(dy):
-            direction = 'right' if dx > 0 else 'left'
-        else:
-            direction = 'down' if dy > 0 else 'up'
+        # Determine movement direction using angle-based approach
+        direction = self._detect_direction_angle(dx, dy)
         
         if self.debug_mode:
-            logger.debug(f"Movement detected: {direction} (magnitude={magnitude:.4f})")
+            logger.debug(f"Movement detected: {direction} (magnitude={magnitude:.4f}, angle={np.arctan2(dy, dx) * 180 / np.pi:.1f}°)")
         
         # Validate movement based on rules
         validation_result = self._validate_movement(direction, current_pose, timestamp)
@@ -223,8 +387,8 @@ class SimpleMediaPipeDetector:
             self.pose_history.append(current_pose)
             return None
         
-        # Calculate confidence based on movement consistency
-        confidence = self._calculate_movement_confidence(direction, magnitude)
+        # Calculate confidence based on movement characteristics
+        confidence = self._calculate_movement_confidence(direction, magnitude, current_pose)
         
         # Create movement result
         movement = MovementResult(
@@ -243,38 +407,54 @@ class SimpleMediaPipeDetector:
         
         return movement
     
-    def _calculate_movement_confidence(self, direction: str, magnitude: float) -> float:
+    def _calculate_movement_confidence(self, direction: str, magnitude: float, pose_data: Dict[str, float]) -> float:
         """
-        Calculate confidence score for detected movement.
+        Calculate enhanced confidence score for detected movement.
         
         Args:
             direction: Movement direction
             magnitude: Movement magnitude
+            pose_data: Current pose data including quality metrics
             
         Returns:
             Confidence score (0.0 to 1.0)
         """
-        # Base confidence from magnitude (more lenient for real movements)
-        base_confidence = min(magnitude / (self.movement_threshold * 2), 1.0)  # Reduced from 3 to 2
+        # Base confidence from magnitude (reward larger movements)
+        magnitude_ratio = magnitude / self.movement_threshold
+        base_confidence = min(magnitude_ratio / 2.0, 1.0)
         
-        # Check consistency with recent movements
+        # Quality boost based on pose quality
+        quality_score = pose_data.get('quality_score', 0.5)
+        quality_boost = quality_score * 0.3  # Up to 30% boost for high quality
+        
+        # Direction consistency check
+        direction_consistency = 1.0
         if len(self.movement_history) > 0:
             recent_directions = [m.direction for m in list(self.movement_history)[-3:]]
-            direction_consistency = sum(1 for d in recent_directions if d == direction) / len(recent_directions)
+            consistency_ratio = sum(1 for d in recent_directions if d == direction) / len(recent_directions)
             
-            # Penalize repetitive movements (likely noise)
-            if direction_consistency > 0.7:  # Less strict than 0.6
-                base_confidence *= 0.6  # Reduced penalty from 0.5
-            
-            # Penalize very small movements less aggressively
-            if magnitude < self.movement_threshold * 1.2:  # Reduced from 1.5
-                base_confidence *= 0.9  # Reduced penalty from 0.8
+            # Reward consistent movements (natural head movements)
+            if consistency_ratio < 0.5:  # Not repetitive
+                direction_consistency = 1.2  # Boost for natural movement patterns
+            elif consistency_ratio > 0.8:  # Too repetitive
+                direction_consistency = 0.7  # Penalty for likely noise
+        
+        # Movement size reward/penalty
+        size_factor = 1.0
+        if magnitude > self.movement_threshold * 2.0:  # Large movement
+            size_factor = 1.3  # Reward significant movements
+        elif magnitude < self.movement_threshold * 1.2:  # Small movement
+            size_factor = 0.8  # Penalty for very small movements
+        
+        # Calculate final confidence
+        confidence = base_confidence * direction_consistency * size_factor + quality_boost
         
         # Ensure minimum confidence for significant movements
-        if magnitude > self.movement_threshold * 1.5:  # Reduced from 2
-            base_confidence = max(base_confidence, 0.5)  # Reduced from 0.6
+        if magnitude > self.movement_threshold * 1.5:
+            confidence = max(confidence, 0.6)
         
-        return min(max(base_confidence, 0.0), 1.0)
+        # Ensure maximum confidence cap
+        return min(max(confidence, 0.0), 1.0)
     
     def process_video(self, video_path: str, expected_sequence: Optional[List[str]] = None) -> DetectionResult:
         """
@@ -334,18 +514,20 @@ class SimpleMediaPipeDetector:
             
             processing_time = time.time() - start_time
             
-            # Calculate statistics
+            # Calculate enhanced statistics
             face_detection_rate = self.frames_with_face / max(self.total_frames, 1)
             avg_magnitude = np.mean(self.movement_magnitudes) if self.movement_magnitudes else 0
+            avg_face_size = np.mean(self.face_sizes) if self.face_sizes else 0
             
             logger.info(f"Video processing completed: {len(movements)} movements in {processing_time:.3f}s")
             logger.info(f"Statistics: frames={self.total_frames}, faces_detected={self.frames_with_face}, "
-                       f"face_rate={face_detection_rate:.3f}, avg_magnitude={avg_magnitude:.4f}")
+                       f"face_rate={face_detection_rate:.3f}, avg_magnitude={avg_magnitude:.4f}, "
+                       f"avg_face_size={avg_face_size:.4f}")
             
             # Log movement summary
             self.log_movement_summary()
             
-            # Adaptive threshold adjustment
+            # Enhanced adaptive threshold adjustment
             if len(movements) == 0 and self.movement_magnitudes:
                 suggested_threshold = np.percentile(self.movement_magnitudes, 25)
                 logger.info(f"No movements detected. Suggested threshold: {suggested_threshold:.4f} "
@@ -422,6 +604,7 @@ class SimpleMediaPipeDetector:
         self.total_frames = 0
         self.frames_with_face = 0
         self.movement_magnitudes = []
+        self.face_sizes = []
         self.last_movement_time = 0
         
         # Reset movement validation state
@@ -429,7 +612,13 @@ class SimpleMediaPipeDetector:
         self.last_movement_direction = None
         self.center_position = None
         
-        logger.info("Detector state reset")
+        # Reset direction tracking
+        self.last_direction = None
+        
+        # Reset adaptive threshold
+        self.movement_threshold = self.base_movement_threshold
+        
+        logger.info("Enhanced detector state reset")
     
     def release(self):
         """Release MediaPipe resources."""
@@ -486,9 +675,11 @@ class SimpleMediaPipeDetector:
         logger.info(f"Confidence stats: avg={np.mean(confidences):.3f}, min={min(confidences):.3f}, max={max(confidences):.3f}")
         logger.info(f"Magnitude stats: avg={np.mean(magnitudes):.4f}, min={min(magnitudes):.4f}, max={max(magnitudes):.4f}")
         
-        # Log validation info
+        # Log enhanced validation and quality info
         if self.debug_mode:
             logger.info(f"Validation settings: face_center_threshold={self.face_center_threshold}, return_threshold={self.return_movement_threshold}")
+            logger.info(f"Quality settings: min_eye_distance={self.min_eye_distance}, min_face_height={self.min_face_height}, min_quality_score={self.min_quality_score}")
+            logger.info(f"Adaptive threshold: base={self.base_movement_threshold}, current={self.movement_threshold}")
     
     def _validate_movement(self, direction: str, current_pose: Dict[str, float], timestamp: float) -> Dict[str, Any]:
         """
