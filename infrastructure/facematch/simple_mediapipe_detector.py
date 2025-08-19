@@ -104,7 +104,7 @@ class SimpleMediaPipeDetector:
         
         # Movement cooldown to prevent rapid-fire detections
         self.last_movement_time = 0
-        self.movement_cooldown = 0.2
+        self.movement_cooldown = 0.1  # Reduced cooldown for better detection
         
         # Movement validation state
         self.initial_face_center = None
@@ -447,14 +447,14 @@ class SimpleMediaPipeDetector:
             return None
         
         # Additional filtering: check for minimum significant movement
-        min_significant_movement = self.movement_threshold * 1.1
+        min_significant_movement = self.movement_threshold * 1.0  # Reduced from 1.1
         if magnitude < min_significant_movement:
             # Only count as movement if it's part of a pattern
             if len(self.movement_history) > 0:
                 last_movement = self.movement_history[-1]
                 time_diff = timestamp - last_movement.timestamp
                 # If this is a continuation of recent movement, allow it
-                if time_diff < 0.8:
+                if time_diff < 1.0:  # Increased from 0.8
                     pass  # Allow the movement
                 else:
                     # Too small and isolated, skip
@@ -463,7 +463,7 @@ class SimpleMediaPipeDetector:
                     return None
             else:
                 # First movement should be more significant but not too restrictive
-                if magnitude < min_significant_movement * 1.2:
+                if magnitude < min_significant_movement * 1.0:  # Reduced from 1.2
                     self.previous_pose = current_pose
                     self.pose_history.append(current_pose)
                     return None
@@ -611,7 +611,7 @@ class SimpleMediaPipeDetector:
                 frame_count += 1
                 
                 # Limit processing for performance
-                if frame_count > 300:  # Max 300 frames
+                if frame_count > 600:  # Max 600 frames (20 seconds at 30 FPS)
                     break
             
             cap.release()
@@ -713,7 +713,7 @@ class SimpleMediaPipeDetector:
                 frame_count += 1
                 
                 # Limit processing for performance
-                if frame_count > 300:  # Max 300 frames
+                if frame_count > 600:  # Max 600 frames (20 seconds at 30 FPS)
                     break
             
             cap.release()
@@ -925,16 +925,28 @@ class SimpleMediaPipeDetector:
             if self.debug_mode:
                 logger.debug(f"Initial face center set: ({face_x:.3f}, {face_y:.3f})")
         
-        # Rule 2: Check for return movements
+        # Rule 2: Check for return movements - but be very lenient for liveness tests
         if self.last_movement_direction is not None:
             # Check if this is a return movement
             is_return_movement = self._is_return_movement(direction, current_pose)
             
             if is_return_movement:
-                return {
-                    'valid': False,
-                    'reason': f'Return movement detected: {self.last_movement_direction} -> {direction}'
-                }
+                # For liveness tests, allow return movements if they're part of a pattern
+                # Only reject if it's a very obvious return to center
+                if len(self.movement_history) < 2:
+                    # Allow first few movements regardless
+                    pass
+                else:
+                    # Check if this is a very obvious return to center
+                    face_x, face_y = current_pose['x'], current_pose['y']
+                    center_x, center_y = self.center_position
+                    distance_from_center = ((face_x - center_x) ** 2 + (face_y - center_y) ** 2) ** 0.5
+                    
+                    if distance_from_center < self.return_movement_threshold * 0.5:  # Very close to center
+                        return {
+                            'valid': False,
+                            'reason': f'Return to center detected: {self.last_movement_direction} -> {direction}'
+                        }
         
         # Movement is valid
         self.last_movement_direction = direction
@@ -966,7 +978,8 @@ class SimpleMediaPipeDetector:
             # Face is close to initial center - likely a return movement
             return True
         
-        # Check for opposite direction movements
+        # Check for opposite direction movements - but be more lenient
+        # Only consider it a return movement if the face is actually close to the initial center
         opposite_pairs = [
             ('left', 'right'),
             ('right', 'left'),
@@ -978,8 +991,10 @@ class SimpleMediaPipeDetector:
             for first, second in opposite_pairs:
                 if (self.last_movement_direction == first and direction == second) or \
                    (self.last_movement_direction == second and direction == first):
-                    # This is an opposite direction movement - likely a return
-                    return True
+                    # Only consider it a return if face is close to initial center
+                    if distance_from_initial < self.return_movement_threshold * 2:  # More lenient threshold
+                        return True
+                    # Otherwise, allow the opposite movement as it might be intentional
         
         return False
     
