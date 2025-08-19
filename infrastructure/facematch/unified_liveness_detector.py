@@ -419,11 +419,11 @@ class VideoLivenessAdapter(BaseLivenessDetector):
         try:
             # Try to initialize simple MediaPipe detector first (more reliable)
             from .simple_mediapipe_detector import create_simple_detector
-            # Use balanced settings for reliable detection
+            # Use adaptive settings based on real-world data
             self.simple_mediapipe_detector = create_simple_detector(
                 min_detection_confidence=0.4,
                 min_tracking_confidence=0.4,
-                movement_threshold=0.015,  # Balanced threshold
+                movement_threshold=0.003,  # Adjusted based on real video analysis
                 debug_mode=True  # Enable debug logging
             )
             self.use_mediapipe = True

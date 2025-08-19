@@ -73,7 +73,7 @@ class SimpleMediaPipeDetector:
         
         # Movement cooldown to prevent rapid-fire detections
         self.last_movement_time = 0
-        self.movement_cooldown = 0.3  # Minimum 0.3 seconds between movements
+        self.movement_cooldown = 0.2  # Reduced from 0.3 seconds for more responsive detection
         
         # Key facial landmarks for head pose estimation
         self.landmarks = {
@@ -168,14 +168,14 @@ class SimpleMediaPipeDetector:
             return None
         
         # Additional filtering: check for minimum significant movement
-        min_significant_movement = self.movement_threshold * 1.2
+        min_significant_movement = self.movement_threshold * 1.1  # Reduced from 1.2
         if magnitude < min_significant_movement:
             # Only count as movement if it's part of a pattern
             if len(self.movement_history) > 0:
                 last_movement = self.movement_history[-1]
                 time_diff = timestamp - last_movement.timestamp
                 # If this is a continuation of recent movement, allow it
-                if time_diff < 0.5:  # Within 0.5 seconds
+                if time_diff < 0.8:  # Increased from 0.5 seconds for more lenient pattern detection
                     pass  # Allow the movement
                 else:
                     # Too small and isolated, skip
@@ -183,8 +183,8 @@ class SimpleMediaPipeDetector:
                     self.pose_history.append(current_pose)
                     return None
             else:
-                # First movement should be more significant
-                if magnitude < min_significant_movement * 1.5:
+                # First movement should be more significant but not too restrictive
+                if magnitude < min_significant_movement * 1.2:  # Reduced from 1.5
                     self.previous_pose = current_pose
                     self.pose_history.append(current_pose)
                     return None
@@ -238,8 +238,8 @@ class SimpleMediaPipeDetector:
         Returns:
             Confidence score (0.0 to 1.0)
         """
-        # Base confidence from magnitude (more selective)
-        base_confidence = min(magnitude / (self.movement_threshold * 3), 1.0)
+        # Base confidence from magnitude (more lenient for real movements)
+        base_confidence = min(magnitude / (self.movement_threshold * 2), 1.0)  # Reduced from 3 to 2
         
         # Check consistency with recent movements
         if len(self.movement_history) > 0:
@@ -247,16 +247,16 @@ class SimpleMediaPipeDetector:
             direction_consistency = sum(1 for d in recent_directions if d == direction) / len(recent_directions)
             
             # Penalize repetitive movements (likely noise)
-            if direction_consistency > 0.6:  # More strict
-                base_confidence *= 0.5  # Stronger penalty
+            if direction_consistency > 0.7:  # Less strict than 0.6
+                base_confidence *= 0.6  # Reduced penalty from 0.5
             
-            # Penalize very small movements
-            if magnitude < self.movement_threshold * 1.5:
-                base_confidence *= 0.8
+            # Penalize very small movements less aggressively
+            if magnitude < self.movement_threshold * 1.2:  # Reduced from 1.5
+                base_confidence *= 0.9  # Reduced penalty from 0.8
         
         # Ensure minimum confidence for significant movements
-        if magnitude > self.movement_threshold * 2:
-            base_confidence = max(base_confidence, 0.6)
+        if magnitude > self.movement_threshold * 1.5:  # Reduced from 2
+            base_confidence = max(base_confidence, 0.5)  # Reduced from 0.6
         
         return min(max(base_confidence, 0.0), 1.0)
     
