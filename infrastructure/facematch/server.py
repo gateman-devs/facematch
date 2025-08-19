@@ -123,7 +123,7 @@ class HealthResponse(BaseModel):
     """Health check response model."""
     status: str
     timestamp: float
-    models: Dict[str, bool]
+    models: Dict[str, Any]  # Changed from Dict[str, bool] to handle nested structures
     version: str = "1.0.0"
     details: Optional[Dict] = None
 
@@ -461,10 +461,16 @@ async def health_check(verbose: bool = False):
     
     # Add unified liveness detector status details
     if unified_liveness_detector:
-        models_status['unified_liveness_modes'] = unified_liveness_detector.get_detector_status()
+        try:
+            detector_status = unified_liveness_detector.get_detector_status()
+            if detector_status:
+                models_status['unified_liveness_modes'] = detector_status
+        except Exception as e:
+            logger.warning(f"Failed to get unified liveness detector status: {e}")
+            models_status['unified_liveness_modes'] = {'error': str(e)}
     
     response_data = {
-        'status': "healthy" if any(models_status.values()) else "degraded",
+        'status': "healthy" if any(v for v in models_status.values() if isinstance(v, bool) and v) else "degraded",
         'timestamp': time.time(),
         'models': models_status,
         'version': "1.0.0"
