@@ -39,7 +39,8 @@ class SimpleMediaPipeDetector:
                  min_detection_confidence: float = 0.5,
                  min_tracking_confidence: float = 0.5,
                  movement_threshold: float = 0.02,
-                 max_history: int = 10):
+                 max_history: int = 10,
+                 debug_mode: bool = False):
         """
         Initialize the detector.
         
@@ -48,6 +49,7 @@ class SimpleMediaPipeDetector:
             min_tracking_confidence: Minimum confidence for landmark tracking
             movement_threshold: Threshold for movement detection (normalized coordinates)
             max_history: Maximum number of poses to keep in history
+            debug_mode: Enable debug logging for troubleshooting
         """
         self.mp_face_mesh = mp.solutions.face_mesh
         self.face_mesh = self.mp_face_mesh.FaceMesh(
@@ -59,9 +61,15 @@ class SimpleMediaPipeDetector:
         
         # Movement detection parameters
         self.movement_threshold = movement_threshold
+        self.debug_mode = debug_mode
         self.previous_pose = None
         self.movement_history = deque(maxlen=max_history)
         self.pose_history = deque(maxlen=max_history)
+        
+        # Statistics for adaptive threshold
+        self.total_frames = 0
+        self.frames_with_face = 0
+        self.movement_magnitudes = []
         
         # Key facial landmarks for head pose estimation
         self.landmarks = {
@@ -132,6 +140,8 @@ class SimpleMediaPipeDetector:
         if self.previous_pose is None:
             self.previous_pose = current_pose
             self.pose_history.append(current_pose)
+            if self.debug_mode:
+                logger.debug(f"First pose detected: x={current_pose['x']:.4f}, y={current_pose['y']:.4f}")
             return None
         
         # Calculate movement
@@ -140,6 +150,12 @@ class SimpleMediaPipeDetector:
         
         # Calculate movement magnitude
         magnitude = np.sqrt(dx**2 + dy**2)
+        
+        # Store magnitude for adaptive threshold
+        self.movement_magnitudes.append(magnitude)
+        
+        if self.debug_mode:
+            logger.debug(f"Movement: dx={dx:.4f}, dy={dy:.4f}, magnitude={magnitude:.4f}, threshold={self.movement_threshold:.4f}")
         
         # Check if movement exceeds threshold
         if magnitude < self.movement_threshold:
@@ -153,6 +169,9 @@ class SimpleMediaPipeDetector:
             direction = 'right' if dx > 0 else 'left'
         else:
             direction = 'down' if dy > 0 else 'up'
+        
+        if self.debug_mode:
+            logger.debug(f"Movement detected: {direction} (magnitude={magnitude:.4f})")
         
         # Calculate confidence based on movement consistency
         confidence = self._calculate_movement_confidence(direction, magnitude)
@@ -236,10 +255,13 @@ class SimpleMediaPipeDetector:
                 if not ret:
                     break
                 
+                self.total_frames += 1
+                
                 # Process frame
                 frame_result = self._process_frame(frame, frame_count)
                 if frame_result:
                     frames_processed += 1
+                    self.frames_with_face += 1
                     if frame_result.get('movement'):
                         movements.append(frame_result['movement'])
                 
@@ -253,7 +275,22 @@ class SimpleMediaPipeDetector:
             
             processing_time = time.time() - start_time
             
+            # Calculate statistics
+            face_detection_rate = self.frames_with_face / max(self.total_frames, 1)
+            avg_magnitude = np.mean(self.movement_magnitudes) if self.movement_magnitudes else 0
+            
             logger.info(f"Video processing completed: {len(movements)} movements in {processing_time:.3f}s")
+            logger.info(f"Statistics: frames={self.total_frames}, faces_detected={self.frames_with_face}, "
+                       f"face_rate={face_detection_rate:.3f}, avg_magnitude={avg_magnitude:.4f}")
+            
+            # Log movement summary
+            self.log_movement_summary()
+            
+            # Adaptive threshold adjustment
+            if len(movements) == 0 and self.movement_magnitudes:
+                suggested_threshold = np.percentile(self.movement_magnitudes, 25)
+                logger.info(f"No movements detected. Suggested threshold: {suggested_threshold:.4f} "
+                           f"(current: {self.movement_threshold:.4f})")
             
             return DetectionResult(
                 success=True,
@@ -323,6 +360,9 @@ class SimpleMediaPipeDetector:
         self.previous_pose = None
         self.movement_history.clear()
         self.pose_history.clear()
+        self.total_frames = 0
+        self.frames_with_face = 0
+        self.movement_magnitudes = []
         logger.info("Detector state reset")
     
     def release(self):
@@ -334,6 +374,47 @@ class SimpleMediaPipeDetector:
     def get_movement_sequence(self) -> List[str]:
         """Get detected movement sequence."""
         return [movement.direction for movement in self.movement_history]
+    
+    def get_detailed_movements(self) -> List[Dict[str, Any]]:
+        """Get detailed movement information for debugging."""
+        return [
+            {
+                'direction': movement.direction,
+                'confidence': movement.confidence,
+                'magnitude': movement.magnitude,
+                'timestamp': movement.timestamp,
+                'pose_data': movement.pose_data
+            }
+            for movement in self.movement_history
+        ]
+    
+    def log_movement_summary(self):
+        """Log a summary of all detected movements."""
+        if not self.movement_history:
+            logger.info("No movements detected during processing")
+            return
+        
+        logger.info(f"Movement Summary - Total: {len(self.movement_history)}")
+        
+        # Group movements by direction
+        direction_counts = {}
+        for movement in self.movement_history:
+            direction = movement.direction
+            direction_counts[direction] = direction_counts.get(direction, 0) + 1
+        
+        for direction, count in direction_counts.items():
+            logger.info(f"  {direction}: {count} movements")
+        
+        # Log sequence
+        sequence = [m.direction for m in self.movement_history]
+        logger.info(f"Movement sequence: {sequence}")
+        
+        # Log statistics
+        confidences = [m.confidence for m in self.movement_history]
+        magnitudes = [m.magnitude for m in self.movement_history]
+        
+        logger.info(f"Confidence stats: avg={np.mean(confidences):.3f}, min={min(confidences):.3f}, max={max(confidences):.3f}")
+        logger.info(f"Magnitude stats: avg={np.mean(magnitudes):.4f}, min={min(magnitudes):.4f}, max={max(magnitudes):.4f}")
     
     def validate_sequence(self, expected_sequence: List[str]) -> Dict[str, Any]:
         """

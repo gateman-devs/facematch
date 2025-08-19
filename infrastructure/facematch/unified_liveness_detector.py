@@ -419,9 +419,15 @@ class VideoLivenessAdapter(BaseLivenessDetector):
         try:
             # Try to initialize simple MediaPipe detector first (more reliable)
             from .simple_mediapipe_detector import create_simple_detector
-            self.simple_mediapipe_detector = create_simple_detector()
+            # Use more sensitive settings for better detection
+            self.simple_mediapipe_detector = create_simple_detector(
+                min_detection_confidence=0.3,
+                min_tracking_confidence=0.3,
+                movement_threshold=0.01,  # Lower threshold for better sensitivity
+                debug_mode=True  # Enable debug logging
+            )
             self.use_mediapipe = True
-            logger.info("VideoLivenessAdapter initialized with simple MediaPipe detector")
+            logger.info("VideoLivenessAdapter initialized with simple MediaPipe detector (sensitive mode)")
         except Exception as e:
             logger.warning(f"Failed to initialize simple MediaPipe detector: {e}")
             
@@ -500,15 +506,25 @@ class VideoLivenessAdapter(BaseLivenessDetector):
             # Analyze movements
             movements = result.movements
             if not movements:
+                # Provide detailed feedback about why no movements were detected
+                logger.warning(f"No movements detected. Video processing stats: "
+                             f"frames_processed={result.frames_processed}, "
+                             f"processing_time={result.processing_time:.3f}s")
+                
                 return {
                     'success': True,
                     'passed': False,
-                    'error': 'No movements detected',
+                    'error': 'No movements detected - possible causes: movement too subtle, face not clearly visible, or video quality issues',
                     'confidence': 0.0,
                     'liveness_score': 0.0,
                     'detected_sequence': [],
                     'expected_sequence': movement_sequence,
-                    'sequence_accuracy': 0.0
+                    'sequence_accuracy': 0.0,
+                    'debug_info': {
+                        'frames_processed': result.frames_processed,
+                        'processing_time': result.processing_time,
+                        'suggested_threshold': 'Try lowering movement_threshold to 0.005'
+                    }
                 }
             
             # Extract movement sequence
@@ -526,6 +542,11 @@ class VideoLivenessAdapter(BaseLivenessDetector):
             # Calculate overall confidence
             movement_confidences = [movement.confidence for movement in movements]
             avg_confidence = sum(movement_confidences) / len(movement_confidences) if movement_confidences else 0.0
+            
+            # Log detected movements for debugging
+            logger.info(f"Detected movements: {detected_sequence}")
+            logger.info(f"Expected sequence: {movement_sequence}")
+            logger.info(f"Sequence accuracy: {sequence_accuracy:.3f}, Avg confidence: {avg_confidence:.3f}")
             
             # Determine if passed (at least 70% accuracy and good confidence)
             passed = sequence_accuracy >= 0.7 and avg_confidence >= 0.6
@@ -545,12 +566,20 @@ class VideoLivenessAdapter(BaseLivenessDetector):
                             'direction': m.direction,
                             'confidence': m.confidence,
                             'magnitude': m.magnitude,
-                            'timestamp': m.timestamp
+                            'timestamp': m.timestamp,
+                            'pose_data': m.pose_data
                         } for m in movements
                     ],
                     'avg_confidence': avg_confidence,
                     'processing_time': result.processing_time,
-                    'frames_processed': result.frames_processed
+                    'frames_processed': result.frames_processed,
+                    'detected_sequence': detected_sequence,
+                    'movement_summary': {
+                        'up_count': detected_sequence.count('up'),
+                        'down_count': detected_sequence.count('down'),
+                        'left_count': detected_sequence.count('left'),
+                        'right_count': detected_sequence.count('right')
+                    }
                 },
                 'details': {
                     'mediapipe_used': True,
