@@ -75,6 +75,13 @@ class SimpleMediaPipeDetector:
         self.last_movement_time = 0
         self.movement_cooldown = 0.2  # Reduced from 0.3 seconds for more responsive detection
         
+        # Movement validation state
+        self.initial_face_center = None  # Store initial face position
+        self.face_center_threshold = 0.1  # Threshold for "centered" face
+        self.return_movement_threshold = 0.05  # Threshold for detecting return movements
+        self.last_movement_direction = None  # Track last movement direction
+        self.center_position = None  # Track center position
+        
         # Key facial landmarks for head pose estimation
         self.landmarks = {
             'nose_tip': 1,
@@ -206,6 +213,15 @@ class SimpleMediaPipeDetector:
         
         if self.debug_mode:
             logger.debug(f"Movement detected: {direction} (magnitude={magnitude:.4f})")
+        
+        # Validate movement based on rules
+        validation_result = self._validate_movement(direction, current_pose, timestamp)
+        if not validation_result['valid']:
+            if self.debug_mode:
+                logger.debug(f"Movement rejected: {validation_result['reason']}")
+            self.previous_pose = current_pose
+            self.pose_history.append(current_pose)
+            return None
         
         # Calculate confidence based on movement consistency
         confidence = self._calculate_movement_confidence(direction, magnitude)
@@ -407,6 +423,12 @@ class SimpleMediaPipeDetector:
         self.frames_with_face = 0
         self.movement_magnitudes = []
         self.last_movement_time = 0
+        
+        # Reset movement validation state
+        self.initial_face_center = None
+        self.last_movement_direction = None
+        self.center_position = None
+        
         logger.info("Detector state reset")
     
     def release(self):
@@ -440,6 +462,10 @@ class SimpleMediaPipeDetector:
         
         logger.info(f"Movement Summary - Total: {len(self.movement_history)}")
         
+        # Log initial face position
+        if self.initial_face_center:
+            logger.info(f"Initial face center: ({self.initial_face_center[0]:.3f}, {self.initial_face_center[1]:.3f})")
+        
         # Group movements by direction
         direction_counts = {}
         for movement in self.movement_history:
@@ -459,6 +485,106 @@ class SimpleMediaPipeDetector:
         
         logger.info(f"Confidence stats: avg={np.mean(confidences):.3f}, min={min(confidences):.3f}, max={max(confidences):.3f}")
         logger.info(f"Magnitude stats: avg={np.mean(magnitudes):.4f}, min={min(magnitudes):.4f}, max={max(magnitudes):.4f}")
+        
+        # Log validation info
+        if self.debug_mode:
+            logger.info(f"Validation settings: face_center_threshold={self.face_center_threshold}, return_threshold={self.return_movement_threshold}")
+    
+    def _validate_movement(self, direction: str, current_pose: Dict[str, float], timestamp: float) -> Dict[str, Any]:
+        """
+        Validate movement based on rules:
+        1. Discard return movements (movements back to center)
+        2. Only allow movements from centered face position
+        
+        Args:
+            direction: Movement direction
+            current_pose: Current pose data
+            timestamp: Current timestamp
+            
+        Returns:
+            Validation result with 'valid' boolean and 'reason' string
+        """
+        # Initialize center position if not set
+        if self.center_position is None:
+            self.center_position = (0.5, 0.5)  # Normalized center of frame
+        
+        # Rule 1: Check if face is initially centered
+        if self.initial_face_center is None:
+            # First movement - check if face is centered
+            face_x, face_y = current_pose['x'], current_pose['y']
+            center_x, center_y = self.center_position
+            
+            # Calculate distance from center
+            distance_from_center = ((face_x - center_x) ** 2 + (face_y - center_y) ** 2) ** 0.5
+            
+            if distance_from_center > self.face_center_threshold:
+                return {
+                    'valid': False,
+                    'reason': f'Face not centered initially (distance: {distance_from_center:.3f})'
+                }
+            
+            # Store initial face center
+            self.initial_face_center = (face_x, face_y)
+            if self.debug_mode:
+                logger.debug(f"Initial face center set: ({face_x:.3f}, {face_y:.3f})")
+        
+        # Rule 2: Check for return movements
+        if self.last_movement_direction is not None:
+            # Check if this is a return movement
+            is_return_movement = self._is_return_movement(direction, current_pose)
+            
+            if is_return_movement:
+                return {
+                    'valid': False,
+                    'reason': f'Return movement detected: {self.last_movement_direction} -> {direction}'
+                }
+        
+        # Movement is valid
+        self.last_movement_direction = direction
+        return {'valid': True, 'reason': 'Valid movement'}
+    
+    def _is_return_movement(self, direction: str, current_pose: Dict[str, float]) -> bool:
+        """
+        Check if current movement is a return movement to center.
+        
+        Args:
+            direction: Current movement direction
+            current_pose: Current pose data
+            
+        Returns:
+            True if this is a return movement
+        """
+        if self.initial_face_center is None:
+            return False
+        
+        # Get current face position
+        current_x, current_y = current_pose['x'], current_pose['y']
+        initial_x, initial_y = self.initial_face_center
+        
+        # Calculate distance from initial center
+        distance_from_initial = ((current_x - initial_x) ** 2 + (current_y - initial_y) ** 2) ** 0.5
+        
+        # Check if movement is bringing face back toward center
+        if distance_from_initial < self.return_movement_threshold:
+            # Face is close to initial center - likely a return movement
+            return True
+        
+        # Check for opposite direction movements
+        opposite_pairs = [
+            ('left', 'right'),
+            ('right', 'left'),
+            ('up', 'down'),
+            ('down', 'up')
+        ]
+        
+        if self.last_movement_direction:
+            for first, second in opposite_pairs:
+                if (self.last_movement_direction == first and direction == second) or \
+                   (self.last_movement_direction == second and direction == first):
+                    # This is an opposite direction movement - likely a return
+                    return True
+        
+        return False
     
     def validate_sequence(self, expected_sequence: List[str]) -> Dict[str, Any]:
         """
