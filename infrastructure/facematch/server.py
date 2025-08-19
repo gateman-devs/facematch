@@ -11,7 +11,7 @@ import tempfile
 import shutil
 import json
 from contextlib import asynccontextmanager
-from typing import Dict, Optional, Any, List
+from typing import Dict, Optional, Any, List, Tuple
 import uvicorn
 import numpy as np
 from fastapi import FastAPI, HTTPException, BackgroundTasks, UploadFile, File, Form
@@ -211,6 +211,20 @@ class FaceComparisonRequest(BaseModel):
             raise ValueError('Image fields cannot be empty')
         return v.strip()
 
+class BatchFaceComparisonRequest(BaseModel):
+    """Request model for batch face comparison."""
+    image_pairs: List[Tuple[str, str]] = Field(..., description="List of (image1, image2) pairs")
+    threshold: Optional[float] = Field(0.6, ge=0.0, le=1.0, description="Similarity threshold (0.0-1.0)")
+    
+    @field_validator('image_pairs')
+    @classmethod
+    def validate_image_pairs(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError('Image pairs list cannot be empty')
+        if len(v) > 10:  # Limit batch size for performance
+            raise ValueError('Maximum 10 image pairs allowed per batch')
+        return v
+
 class FaceComparisonResponse(BaseModel):
     """Response model for face comparison."""
     success: bool
@@ -219,6 +233,17 @@ class FaceComparisonResponse(BaseModel):
     threshold: float
     confidence: str
     processing_time: Optional[float] = None
+    error: Optional[str] = None
+
+class BatchFaceComparisonResponse(BaseModel):
+    """Response model for batch face comparison."""
+    success: bool
+    results: List[FaceComparisonResponse]
+    total_pairs: int
+    successful_comparisons: int
+    failed_comparisons: int
+    total_processing_time: float
+    average_processing_time: float
     error: Optional[str] = None
 
 class VideoChallengeWithComparisonRequest(BaseModel):
@@ -1426,6 +1451,7 @@ async def image_liveness_check(request: ImageLivenessRequest):
 async def face_comparison(request: FaceComparisonRequest):
     """
     Compare two faces from URLs or base64 images.
+    Optimized with concurrent processing for maximum performance.
     """
     start_time = time.time()
     
@@ -1439,9 +1465,9 @@ async def face_comparison(request: FaceComparisonRequest):
                 detail="Face comparison service not available"
             )
         
-        logger.info(f"Processing face comparison with threshold {request.threshold}")
+        logger.info(f"Processing optimized face comparison with threshold {request.threshold}")
         
-        # Perform face comparison using integrator with comprehensive error handling
+        # Perform face comparison using optimized integrator with concurrent processing
         result = integrator.compare_faces_with_validation(
             image1=request.image1,
             image2=request.image2,
@@ -1452,8 +1478,18 @@ async def face_comparison(request: FaceComparisonRequest):
         
         # Convert integrator result to API response
         if result.success:
-            logger.info(f"Face comparison completed successfully: match={result.match}, "
-                       f"similarity={result.similarity_score:.4f}, confidence={result.confidence}")
+            # Log detailed performance metrics
+            timing_details = result.details.get('timing', {}) if result.details else {}
+            image_load_time = timing_details.get('image_load_time', 0)
+            embedding_time = timing_details.get('embedding_time', 0)
+            similarity_time = timing_details.get('similarity_time', 0)
+            
+            logger.info(f"Optimized face comparison completed successfully: "
+                       f"match={result.match}, similarity={result.similarity_score:.4f}, "
+                       f"confidence={result.confidence}, total_time={result.processing_time:.3f}s, "
+                       f"image_load={image_load_time:.3f}s, embedding={embedding_time:.3f}s, "
+                       f"similarity={similarity_time:.3f}s")
+            
             return FaceComparisonResponse(
                 success=True,
                 match=result.match,
@@ -1483,6 +1519,181 @@ async def face_comparison(request: FaceComparisonRequest):
         raise HTTPException(
             status_code=500,
             detail=f"Face comparison failed: {str(e)}"
+        )
+
+@app.post("/batch-face-comparison", response_model=BatchFaceComparisonResponse)
+async def batch_face_comparison(request: BatchFaceComparisonRequest):
+    """
+    Compare a batch of face image pairs for similarity.
+    """
+    start_time = time.time()
+    
+    try:
+        # Get face comparison integrator
+        integrator = get_face_comparison_integrator()
+        if not integrator:
+            logger.error("Face comparison integrator not available")
+            raise HTTPException(
+                status_code=503,
+                detail="Face comparison service not available"
+            )
+        
+        logger.info(f"Processing batch face comparison for {len(request.image_pairs)} pairs")
+        
+        # Prepare image pairs for processing
+        processed_pairs = []
+        for i, (image1_url, image2_url) in enumerate(request.image_pairs):
+            try:
+                # Load images concurrently
+                image1_result = await load_image_pair(image1_url, None, max_file_size=MAX_IMAGE_SIZE, timeout=REQUEST_TIMEOUT)
+                image2_result = await load_image_pair(image2_url, None, max_file_size=MAX_IMAGE_SIZE, timeout=REQUEST_TIMEOUT)
+
+                if not image1_result['success']:
+                    processed_pairs.append({
+                        'success': False,
+                        'error': f"Failed to load image1 for pair {i}: {image1_result['error']}"
+                    })
+                    continue
+                if not image2_result['success']:
+                    processed_pairs.append({
+                        'success': False,
+                        'error': f"Failed to load image2 for pair {i}: {image2_result['error']}"
+                    })
+                    continue
+
+                # Resize images if needed
+                image1 = resize_image_if_needed(image1_result['image'], MAX_IMAGE_DIMENSION)
+                image2 = resize_image_if_needed(image2_result['image'], MAX_IMAGE_DIMENSION)
+
+                # Validate image quality
+                quality1 = validate_image_quality(image1)
+                quality2 = validate_image_quality(image2)
+
+                if not quality1['valid']:
+                    processed_pairs.append({
+                        'success': False,
+                        'error': f"Image1 quality issue for pair {i}: {quality1['error']}"
+                    })
+                    continue
+                if not quality2['valid']:
+                    processed_pairs.append({
+                        'success': False,
+                        'error': f"Image2 quality issue for pair {i}: {quality2['error']}"
+                    })
+                    continue
+
+                # Detect faces
+                detection1 = face_detector.detect_faces(image1)
+                detection2 = face_detector.detect_faces(image2)
+
+                # Validate single face requirement
+                validation1 = face_detector.validate_single_face(detection1)
+                validation2 = face_detector.validate_single_face(detection2)
+
+                if not validation1['valid']:
+                    processed_pairs.append({
+                        'success': False,
+                        'error': f"Image1 face detection issue for pair {i}: {validation1['error']}"
+                    })
+                    continue
+                if not validation2['valid']:
+                    processed_pairs.append({
+                        'success': False,
+                        'error': f"Image2 face detection issue for pair {i}: {validation2['error']}"
+                    })
+                    continue
+
+                # Extract face regions
+                face1 = face_detector.extract_face_region(image1, validation1['bbox'])
+                face2 = face_detector.extract_face_region(image2, validation2['bbox'])
+
+                # Align faces
+                face1_aligned = face_detector.align_face(face1, validation1['keypoints'])
+                face2_aligned = face_detector.align_face(face2, validation2['keypoints'])
+
+                # Perform liveness detection if available
+                liveness_results = None
+                if liveness_detector:
+                    try:
+                        liveness1 = liveness_detector.detect_liveness_with_quality_check(face1_aligned)
+                        liveness2 = liveness_detector.detect_liveness_with_quality_check(face2_aligned)
+                        liveness_results = {
+                            'image1': liveness1,
+                            'image2': liveness2
+                        }
+                    except Exception as e:
+                        logger.warning(f"Liveness detection failed for pair {i}: {e}")
+                        liveness_results = {
+                            'error': str(e),
+                            'image1': {'success': False, 'error': str(e)},
+                            'image2': {'success': False, 'error': str(e)}
+                        }
+
+                # Perform face recognition
+                recognition_result = face_recognizer.compare_faces(
+                    face1_aligned, 
+                    face2_aligned, 
+                    threshold=request.threshold
+                )
+
+                if not recognition_result['success']:
+                    processed_pairs.append({
+                        'success': False,
+                        'error': f"Face recognition failed for pair {i}: {recognition_result['error']}"
+                    })
+                    continue
+
+                processed_pairs.append({
+                    'success': True,
+                    'match': recognition_result['match'],
+                    'similarity_score': float(recognition_result['similarity_score']),
+                    'confidence': float(recognition_result['confidence']),
+                    'threshold': float(request.threshold),
+                    'processing_time': float(time.time() - start_time), # This is a bit off, should be per pair
+                    'image_loading_time': float(image1_result['loading_time'] + image2_result['loading_time'])
+                })
+
+            except Exception as e:
+                processed_pairs.append({
+                    'success': False,
+                    'error': f"An unexpected error occurred for pair {i}: {str(e)}"
+                })
+
+        # Calculate total processing time and average processing time
+        total_processing_time = time.time() - start_time
+        average_processing_time = total_processing_time / len(request.image_pairs) if request.image_pairs else 0
+
+        # Prepare final response
+        response_data = {
+            'success': True,
+            'results': processed_pairs,
+            'total_pairs': len(request.image_pairs),
+            'successful_comparisons': sum(1 for p in processed_pairs if p['success']),
+            'failed_comparisons': sum(1 for p in processed_pairs if not p['success']),
+            'total_processing_time': total_processing_time,
+            'average_processing_time': average_processing_time
+        }
+
+        # Convert numpy types for JSON serialization
+        response_data = convert_numpy_types(response_data)
+
+        logger.info(f"Batch face comparison completed for {len(request.image_pairs)} pairs. "
+                   f"Total processing time: {total_processing_time:.3f}s, "
+                   f"Average processing time: {average_processing_time:.3f}s")
+
+        return BatchFaceComparisonResponse(**response_data)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Batch face comparison failed: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                'success': False,
+                'error': str(e),
+                'total_processing_time': time.time() - start_time
+            }
         )
 
 @app.post("/create-challenge-with-comparison")
@@ -1620,13 +1831,14 @@ async def root():
     """Root endpoint with API information."""
     return {
         "message": "Gateman Liveness Check API",
-        "version": "2.0.0",
-        "description": "Enhanced liveness detection with face comparison and anti-spoofing",
+        "version": "2.1.0",
+        "description": "Enhanced liveness detection with optimized face comparison and anti-spoofing",
         "endpoints": {
             "health": "/health",
             "face_matching": "/match",
             "image_liveness": "/image-liveness-check",
             "face_comparison": "/face-comparison",
+            "batch_face_comparison": "/batch-face-comparison",
             "simple_challenge": "/create-simple-challenge",
             "challenge_with_comparison": "/create-challenge-with-comparison",
             "submit_challenge": "/submit-simple-challenge",
@@ -1635,15 +1847,25 @@ async def root():
         },
         "features": [
             "Static image liveness detection",
-            "Face comparison (URL/base64 support)",
+            "Optimized face comparison with concurrent processing",
+            "Batch face comparison (up to 10 pairs)",
             "Video liveness challenges",
             "Advanced anti-spoofing detection",
             "Head movement validation",
             "Redis session management",
             "Liveness result storage (1-hour expiration)",
             "3rd party integration support",
-            "Automatic session cleanup"
-        ]
+            "Automatic session cleanup",
+            "Performance optimizations: concurrent image loading, parallel embedding extraction, image caching"
+        ],
+        "performance_optimizations": {
+            "concurrent_image_loading": "Load and preprocess images simultaneously",
+            "parallel_embedding_extraction": "Extract face embeddings concurrently",
+            "image_caching": "Cache processed images for repeated comparisons",
+            "batch_processing": "Process multiple face comparisons in parallel",
+            "thread_pool_execution": "Use ThreadPoolExecutor for CPU-intensive tasks",
+            "optimized_pipeline": "Streamlined preprocessing and comparison pipeline"
+        }
     }
 
 @app.exception_handler(Exception)

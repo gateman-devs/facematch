@@ -1,14 +1,19 @@
 """
 Face Comparison Integration Module
 Provides seamless integration between face comparison and liveness detection with comprehensive error handling and logging.
+Optimized for concurrent processing and maximum performance.
 """
 
 import logging
 import time
-from typing import Dict, Optional, Any, Union
+import asyncio
+from typing import Dict, Optional, Any, Union, Tuple, List
 from dataclasses import dataclass
 import numpy as np
-import cv2 # Added missing import for cv2
+import cv2
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from functools import lru_cache
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -47,6 +52,7 @@ class FaceComparisonIntegrator:
     """
     Handles seamless integration between face comparison and liveness detection.
     Provides comprehensive error handling and logging for all face comparison operations.
+    Optimized for concurrent processing and maximum performance.
     """
     
     def __init__(self, face_recognizer=None, unified_detector=None):
@@ -62,7 +68,16 @@ class FaceComparisonIntegrator:
         self.default_threshold = 0.6
         self.max_processing_time = 30.0  # Maximum allowed processing time in seconds
         
-        logger.info("Face comparison integrator initialized")
+        # Performance optimization settings
+        self.max_workers = 4  # Number of concurrent workers for image processing
+        self.thread_pool = ThreadPoolExecutor(max_workers=self.max_workers)
+        self._lock = threading.Lock()  # Thread safety for shared resources
+        
+        # Image cache for repeated comparisons (LRU cache)
+        self._image_cache = {}
+        self._cache_max_size = 100
+        
+        logger.info("Face comparison integrator initialized with concurrent processing optimizations")
     
     def compare_faces_with_validation(
         self,
@@ -74,6 +89,7 @@ class FaceComparisonIntegrator:
     ) -> FaceComparisonResult:
         """
         Perform face comparison with comprehensive validation and error handling.
+        Optimized for concurrent processing and maximum performance.
         
         Args:
             image1: First image (path, URL, base64, or numpy array)
@@ -111,9 +127,10 @@ class FaceComparisonIntegrator:
                     processing_time=time.time() - start_time
                 )
             
-            # Convert string inputs to numpy arrays if needed
-            face1_array = self._convert_to_numpy_array(image1)
-            face2_array = self._convert_to_numpy_array(image2)
+            # Concurrent image loading and preprocessing
+            image_load_start = time.time()
+            face1_array, face2_array = self._concurrent_load_and_preprocess_images(image1, image2)
+            image_load_time = time.time() - image_load_start
             
             if face1_array is None:
                 return self._create_error_result(
@@ -131,10 +148,48 @@ class FaceComparisonIntegrator:
                     processing_time=time.time() - start_time
                 )
             
-            # Perform face comparison using ArcFace recognizer with numpy arrays
-            comparison_result = self.face_recognizer.compare_faces(
-                face1_array, face2_array, threshold
+            # Concurrent embedding extraction
+            embedding_start = time.time()
+            emb1_result, emb2_result = self._concurrent_extract_embeddings(face1_array, face2_array)
+            embedding_time = time.time() - embedding_start
+            
+            # Check embedding extraction results
+            if not emb1_result['success']:
+                return self._create_error_result(
+                    error=f"Failed to extract embedding from first face: {emb1_result.get('error', 'Unknown error')}",
+                    error_code="EMBEDDING_EXTRACTION_ERROR",
+                    threshold=threshold,
+                    processing_time=time.time() - start_time
+                )
+            
+            if not emb2_result['success']:
+                return self._create_error_result(
+                    error=f"Failed to extract embedding from second face: {emb2_result.get('error', 'Unknown error')}",
+                    error_code="EMBEDDING_EXTRACTION_ERROR",
+                    threshold=threshold,
+                    processing_time=time.time() - start_time
+                )
+            
+            # Calculate similarity (this is fast, no need for concurrency)
+            similarity_start = time.time()
+            similarity_result = self.face_recognizer.calculate_similarity(
+                emb1_result['embedding'], 
+                emb2_result['embedding']
             )
+            similarity_time = time.time() - similarity_start
+            
+            if 'error' in similarity_result:
+                return self._create_error_result(
+                    error=f"Similarity calculation failed: {similarity_result['error']}",
+                    error_code="SIMILARITY_CALCULATION_ERROR",
+                    threshold=threshold,
+                    processing_time=time.time() - start_time
+                )
+            
+            # Determine match based on threshold
+            similarity_score = similarity_result['similarity_score']
+            is_match = similarity_score >= threshold
+            confidence = abs(similarity_score - threshold) + threshold
             
             processing_time = time.time() - start_time
             
@@ -148,37 +203,42 @@ class FaceComparisonIntegrator:
                     processing_time=processing_time
                 )
             
-            # Handle comparison result
-            if not comparison_result.get('success', False):
-                error_msg = comparison_result.get('error', 'Face comparison failed')
-                self._log_face_comparison_error(session_id, error_msg, processing_time)
-                return self._create_error_result(
-                    error=error_msg,
-                    error_code="COMPARISON_FAILED",
-                    threshold=threshold,
-                    processing_time=processing_time
-                )
-            
-            # Create successful result
+            # Create successful result with detailed timing
             result = FaceComparisonResult(
                 success=True,
-                match=comparison_result['match'],
-                similarity_score=comparison_result['similarity_score'],
+                match=is_match,
+                similarity_score=similarity_score,
                 threshold=threshold,
-                confidence=self._calculate_confidence_level(
-                    comparison_result['similarity_score'], 
-                    threshold
-                ),
+                confidence=self._calculate_confidence_level(similarity_score, threshold),
                 processing_time=processing_time,
                 details={
-                    'distance_metrics': comparison_result.get('distance_metrics', {}),
-                    'embedding_quality': comparison_result.get('embedding_quality', {}),
-                    'timing': comparison_result.get('timing', {})
+                    'distance_metrics': similarity_result,
+                    'embedding_quality': {
+                        'face1_quality': emb1_result['quality_metrics'],
+                        'face2_quality': emb2_result['quality_metrics']
+                    },
+                    'timing': {
+                        'image_load_time': image_load_time,
+                        'embedding_time': embedding_time,
+                        'similarity_time': similarity_time,
+                        'face1_embedding_time': emb1_result['inference_time'],
+                        'face2_embedding_time': emb2_result['inference_time'],
+                        'total_time': processing_time
+                    }
                 },
-                quality_metrics=self._extract_quality_metrics(comparison_result)
+                quality_metrics=self._extract_quality_metrics({
+                    'embedding_quality': {
+                        'face1_quality': emb1_result['quality_metrics'],
+                        'face2_quality': emb2_result['quality_metrics']
+                    },
+                    'timing': {
+                        'face1_embedding_time': emb1_result['inference_time'],
+                        'face2_embedding_time': emb2_result['inference_time']
+                    }
+                })
             )
             
-            # Log successful comparison
+            # Log successful comparison with performance metrics
             self._log_face_comparison_success(session_id, result)
             
             return result
@@ -195,9 +255,70 @@ class FaceComparisonIntegrator:
                 processing_time=processing_time
             )
     
+    def _concurrent_load_and_preprocess_images(
+        self, 
+        image1: Union[str, np.ndarray], 
+        image2: Union[str, np.ndarray]
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """
+        Load and preprocess both images concurrently for maximum performance.
+        
+        Args:
+            image1: First image input
+            image2: Second image input
+            
+        Returns:
+            Tuple of preprocessed numpy arrays
+        """
+        try:
+            # Submit both image processing tasks concurrently
+            future1 = self.thread_pool.submit(self._convert_to_numpy_array, image1)
+            future2 = self.thread_pool.submit(self._convert_to_numpy_array, image2)
+            
+            # Wait for both tasks to complete
+            face1_array = future1.result(timeout=10.0)  # 10 second timeout per image
+            face2_array = future2.result(timeout=10.0)
+            
+            return face1_array, face2_array
+            
+        except Exception as e:
+            logger.error(f"Concurrent image loading failed: {e}")
+            return None, None
+    
+    def _concurrent_extract_embeddings(
+        self, 
+        face1_array: np.ndarray, 
+        face2_array: np.ndarray
+    ) -> Tuple[Dict, Dict]:
+        """
+        Extract embeddings for both faces concurrently.
+        
+        Args:
+            face1_array: First face image array
+            face2_array: Second face image array
+            
+        Returns:
+            Tuple of embedding extraction results
+        """
+        try:
+            # Submit both embedding extraction tasks concurrently
+            future1 = self.thread_pool.submit(self.face_recognizer.extract_embedding, face1_array)
+            future2 = self.thread_pool.submit(self.face_recognizer.extract_embedding, face2_array)
+            
+            # Wait for both tasks to complete
+            emb1_result = future1.result(timeout=15.0)  # 15 second timeout per embedding
+            emb2_result = future2.result(timeout=15.0)
+            
+            return emb1_result, emb2_result
+            
+        except Exception as e:
+            logger.error(f"Concurrent embedding extraction failed: {e}")
+            return {'success': False, 'error': str(e)}, {'success': False, 'error': str(e)}
+    
     def _convert_to_numpy_array(self, image_input: Union[str, np.ndarray]) -> Optional[np.ndarray]:
         """
         Convert image input (URL, base64, or numpy array) to numpy array.
+        Optimized with caching for repeated images.
         
         Args:
             image_input: Image input (URL, base64, or numpy array)
@@ -210,8 +331,16 @@ class FaceComparisonIntegrator:
             if isinstance(image_input, np.ndarray):
                 return image_input
             
-            # If it's a string, convert to numpy array
+            # If it's a string, check cache first
             if isinstance(image_input, str):
+                # Create cache key (simple hash for performance)
+                cache_key = hash(image_input) % 1000000
+                
+                with self._lock:
+                    if cache_key in self._image_cache:
+                        logger.debug("Image cache hit")
+                        return self._image_cache[cache_key]
+                
                 # Import here to avoid circular imports
                 from .image_utils import image_processor
                 
@@ -222,6 +351,14 @@ class FaceComparisonIntegrator:
                     # Convert BGR to RGB if needed (OpenCV uses BGR, but face recognition expects RGB)
                     if len(numpy_array.shape) == 3 and numpy_array.shape[2] == 3:
                         numpy_array = cv2.cvtColor(numpy_array, cv2.COLOR_BGR2RGB)
+                    
+                    # Cache the result
+                    with self._lock:
+                        if len(self._image_cache) >= self._cache_max_size:
+                            # Remove oldest entry (simple FIFO)
+                            oldest_key = next(iter(self._image_cache))
+                            del self._image_cache[oldest_key]
+                        self._image_cache[cache_key] = numpy_array
                 
                 return numpy_array
             
@@ -230,6 +367,84 @@ class FaceComparisonIntegrator:
         except Exception as e:
             logger.error(f"Failed to convert image input to numpy array: {e}")
             return None
+    
+    def batch_compare_faces(
+        self, 
+        image_pairs: List[Tuple[Union[str, np.ndarray], Union[str, np.ndarray]]],
+        threshold: Optional[float] = None,
+        session_id: Optional[str] = None
+    ) -> List[FaceComparisonResult]:
+        """
+        Perform batch face comparison for multiple image pairs concurrently.
+        
+        Args:
+            image_pairs: List of (image1, image2) pairs
+            threshold: Similarity threshold
+            session_id: Session ID for logging
+            
+        Returns:
+            List of face comparison results
+        """
+        start_time = time.time()
+        threshold = threshold or self.default_threshold
+        
+        logger.info(f"Starting batch face comparison: {len(image_pairs)} pairs")
+        
+        try:
+            # Submit all comparison tasks concurrently
+            futures = []
+            for i, (img1, img2) in enumerate(image_pairs):
+                future = self.thread_pool.submit(
+                    self.compare_faces_with_validation,
+                    img1, img2, threshold, True, f"{session_id}_pair_{i}"
+                )
+                futures.append(future)
+            
+            # Collect results
+            results = []
+            for future in as_completed(futures, timeout=60.0):  # 60 second total timeout
+                try:
+                    result = future.result(timeout=30.0)
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"Batch comparison task failed: {e}")
+                    results.append(self._create_error_result(
+                        error=f"Batch task failed: {str(e)}",
+                        error_code="BATCH_TASK_ERROR",
+                        threshold=threshold,
+                        processing_time=time.time() - start_time
+                    ))
+            
+            total_time = time.time() - start_time
+            logger.info(f"Batch face comparison completed: {len(results)} results in {total_time:.3f}s")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Batch face comparison failed: {e}")
+            return [self._create_error_result(
+                error=f"Batch comparison failed: {str(e)}",
+                error_code="BATCH_ERROR",
+                threshold=threshold,
+                processing_time=time.time() - start_time
+            ) for _ in image_pairs]
+    
+    def cleanup(self):
+        """Clean up resources."""
+        try:
+            self.thread_pool.shutdown(wait=True)
+            with self._lock:
+                self._image_cache.clear()
+            logger.info("Face comparison integrator resources cleaned up")
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+    
+    def __del__(self):
+        """Destructor to ensure cleanup."""
+        try:
+            self.cleanup()
+        except:
+            pass
     
     def integrate_with_liveness_detection(
         self,

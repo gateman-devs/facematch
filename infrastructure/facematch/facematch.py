@@ -316,7 +316,7 @@ class FaceRecognizer:
     
     def batch_extract_embeddings(self, face_images: List[np.ndarray]) -> List[Dict]:
         """
-        Extract embeddings for multiple face images.
+        Extract embeddings for multiple face images concurrently.
         
         Args:
             face_images: List of face images
@@ -326,22 +326,154 @@ class FaceRecognizer:
         """
         results = []
         
-        for i, face_image in enumerate(face_images):
-            try:
-                result = self.extract_embedding(face_image)
-                result['image_index'] = i
-                results.append(result)
-            except Exception as e:
-                logger.error(f"Embedding extraction failed for image {i}: {e}")
-                results.append({
-                    'success': False,
-                    'error': str(e),
-                    'image_index': i,
-                    'embedding': None,
-                    'embedding_size': 0
-                })
+        # Use ThreadPoolExecutor for concurrent processing
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+        
+        # Create thread pool for concurrent embedding extraction
+        max_workers = min(4, len(face_images))  # Limit to 4 workers or number of images
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all embedding extraction tasks
+            future_to_index = {
+                executor.submit(self.extract_embedding, face_image): i 
+                for i, face_image in enumerate(face_images)
+            }
+            
+            # Initialize results list
+            results = [None] * len(face_images)
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_index):
+                index = future_to_index[future]
+                try:
+                    result = future.result(timeout=15.0)  # 15 second timeout per embedding
+                    result['image_index'] = index
+                    results[index] = result
+                except Exception as e:
+                    logger.error(f"Embedding extraction failed for image {index}: {e}")
+                    results[index] = {
+                        'success': False,
+                        'error': str(e),
+                        'image_index': index,
+                        'embedding': None,
+                        'embedding_size': 0
+                    }
         
         return results
+    
+    def batch_compare_faces(
+        self, 
+        face_pairs: List[Tuple[np.ndarray, np.ndarray]], 
+        threshold: float = 0.6
+    ) -> List[Dict]:
+        """
+        Compare multiple face pairs concurrently.
+        
+        Args:
+            face_pairs: List of (face1, face2) pairs
+            threshold: Similarity threshold for match decision
+            
+        Returns:
+            List of face comparison results
+        """
+        start_time = time.time()
+        
+        try:
+            # Extract all embeddings concurrently
+            all_faces = []
+            face_pair_indices = []
+            
+            for i, (face1, face2) in enumerate(face_pairs):
+                all_faces.extend([face1, face2])
+                face_pair_indices.append((i * 2, i * 2 + 1))
+            
+            # Extract embeddings for all faces concurrently
+            embedding_results = self.batch_extract_embeddings(all_faces)
+            
+            # Process results
+            comparison_results = []
+            for i, (face1_idx, face2_idx) in enumerate(face_pair_indices):
+                emb1_result = embedding_results[face1_idx]
+                emb2_result = embedding_results[face2_idx]
+                
+                if not emb1_result['success']:
+                    comparison_results.append({
+                        'success': False,
+                        'error': f"Failed to extract embedding from first face in pair {i}: {emb1_result.get('error', 'Unknown error')}",
+                        'match': False,
+                        'similarity_score': 0.0,
+                        'pair_index': i
+                    })
+                    continue
+                
+                if not emb2_result['success']:
+                    comparison_results.append({
+                        'success': False,
+                        'error': f"Failed to extract embedding from second face in pair {i}: {emb2_result.get('error', 'Unknown error')}",
+                        'match': False,
+                        'similarity_score': 0.0,
+                        'pair_index': i
+                    })
+                    continue
+                
+                # Calculate similarity
+                similarity_result = self.calculate_similarity(
+                    emb1_result['embedding'], 
+                    emb2_result['embedding']
+                )
+                
+                if 'error' in similarity_result:
+                    comparison_results.append({
+                        'success': False,
+                        'error': f"Similarity calculation failed for pair {i}: {similarity_result['error']}",
+                        'match': False,
+                        'similarity_score': 0.0,
+                        'pair_index': i
+                    })
+                    continue
+                
+                # Determine match based on threshold
+                similarity_score = similarity_result['similarity_score']
+                is_match = similarity_score >= threshold
+                confidence = abs(similarity_score - threshold) + threshold
+                
+                comparison_results.append({
+                    'success': True,
+                    'match': is_match,
+                    'similarity_score': similarity_score,
+                    'confidence': min(confidence, 1.0),
+                    'threshold': threshold,
+                    'pair_index': i,
+                    'distance_metrics': {
+                        'cosine_similarity': similarity_result['cosine_similarity'],
+                        'cosine_distance': similarity_result['cosine_distance'],
+                        'euclidean_distance': similarity_result['euclidean_distance'],
+                        'manhattan_distance': similarity_result['manhattan_distance']
+                    },
+                    'embedding_quality': {
+                        'face1_quality': emb1_result['quality_metrics'],
+                        'face2_quality': emb2_result['quality_metrics']
+                    },
+                    'timing': {
+                        'face1_embedding_time': emb1_result['inference_time'],
+                        'face2_embedding_time': emb2_result['inference_time']
+                    }
+                })
+            
+            total_time = time.time() - start_time
+            logger.info(f"Batch face comparison completed: {len(comparison_results)} pairs in {total_time:.3f}s")
+            
+            return comparison_results
+            
+        except Exception as e:
+            logger.error(f"Batch face comparison failed: {e}")
+            return [{
+                'success': False,
+                'error': str(e),
+                'match': False,
+                'similarity_score': 0.0,
+                'pair_index': i
+            } for i in range(len(face_pairs))]
 
 def validate_arcface_model(model_path: str) -> Dict:
     """
