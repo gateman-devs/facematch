@@ -24,7 +24,7 @@ from .performance_optimizer import (
 from .face_detection import FaceDetector
 from .movement_confidence import MovementConfidenceScorer, create_confidence_scorer
 from .flexible_sequence_validator import FlexibleSequenceValidator
-from .mediapipe_head_detector import MediaPipeHeadDetector, create_mediapipe_detector
+from .dlib_head_detector import DlibHeadDetector, create_dlib_detector
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ class OptimizedVideoProcessor:
         face_detector: Optional[FaceDetector] = None,
         optimization_config: Optional[OptimizationConfig] = None,
         use_performance_mode: bool = True,
-        use_mediapipe: bool = True
+        use_dlib: bool = True
     ):
         """
         Initialize optimized video processor.
@@ -61,7 +61,7 @@ class OptimizedVideoProcessor:
             face_detector: Face detector instance (will create if None)
             optimization_config: Optimization configuration
             use_performance_mode: Use performance-optimized settings
-            use_mediapipe: Use MediaPipe for head movement detection
+            use_dlib: Use dlib for head movement detection
         """
         # Initialize face detector
         self.face_detector = face_detector or FaceDetector()
@@ -75,13 +75,17 @@ class OptimizedVideoProcessor:
         else:
             self.optimization_config = optimization_config
         
-        # Initialize MediaPipe head detector if enabled
-        self.use_mediapipe = use_mediapipe
-        if self.use_mediapipe:
-            self.mediapipe_detector = create_mediapipe_detector()
-            logger.info("MediaPipe head detector initialized")
+        # Initialize dlib head detector if enabled
+        self.use_dlib = use_dlib
+        if self.use_dlib:
+            self.dlib_detector = create_dlib_detector({
+                'min_rotation_degrees': 15.0,
+                'significant_rotation_degrees': 25.0,
+                'debug_mode': False
+            })
+            logger.info("Dlib head detector initialized")
         else:
-            self.mediapipe_detector = None
+            self.dlib_detector = None
         
         # Initialize optimizer and supporting components
         self.optimizer = VideoProcessingOptimizer(self.optimization_config)
@@ -123,10 +127,10 @@ class OptimizedVideoProcessor:
                     processing_time=time.time() - start_time
                 )
             
-            # Use MediaPipe detector if available
-            if self.use_mediapipe and self.mediapipe_detector:
-                logger.info("Using MediaPipe for head movement detection")
-                return self._process_with_mediapipe(video_path, expected_sequence, start_time)
+            # Use dlib detector if available
+            if self.use_dlib and self.dlib_detector:
+                logger.info("Using dlib for head movement detection")
+                return self._process_with_dlib(video_path, expected_sequence, start_time)
             else:
                 logger.info("Using legacy processing pipeline")
                 return self._process_with_legacy_pipeline(video_path, expected_sequence, start_time)
@@ -140,42 +144,42 @@ class OptimizedVideoProcessor:
                 processing_time=time.time() - start_time
             )
     
-    def _process_with_mediapipe(
+    def _process_with_dlib(
         self, 
         video_path: str, 
         expected_sequence: Optional[List[str]], 
         start_time: float
     ) -> VideoProcessingResult:
-        """Process video using MediaPipe head movement detection."""
+        """Process video using dlib head movement detection."""
         try:
-            # Use MediaPipe detector
-            mediapipe_result = self.mediapipe_detector.detect_head_movements(
-                video_path, expected_sequence
-            )
+            # Use dlib detector
+            dlib_result = self.dlib_detector.process_video(video_path)
             
-            if not mediapipe_result.success:
+            if not dlib_result.success:
                 return VideoProcessingResult(
                     success=False,
                     movements=[],
-                    error=mediapipe_result.error or "MediaPipe processing failed",
+                    error=dlib_result.error or "Dlib processing failed",
                     processing_time=time.time() - start_time
                 )
             
-            # Convert MediaPipe movements to standard format
+            # Convert dlib movements to standard format
             movements = []
-            for mp_movement in mediapipe_result.movements:
+            for dlib_movement in dlib_result.movements:
                 movement = {
-                    'direction': mp_movement.direction,
-                    'confidence': mp_movement.confidence,
-                    'magnitude': mp_movement.magnitude,
-                    'timestamp': mp_movement.timestamp,
-                    'start_position': mp_movement.start_position,
-                    'end_position': mp_movement.end_position,
-                    'dx_pixels': mp_movement.velocity[0] * 0.033,  # Approximate conversion
-                    'dy_pixels': mp_movement.velocity[1] * 0.033,
-                    'dx_norm': mp_movement.velocity[0] / (np.sqrt(mp_movement.velocity[0]**2 + mp_movement.velocity[1]**2) + 1e-6),
-                    'dy_norm': mp_movement.velocity[1] / (np.sqrt(mp_movement.velocity[0]**2 + mp_movement.velocity[1]**2) + 1e-6),
-                    'frame_indices': (0, 1)  # Placeholder
+                    'direction': dlib_movement.direction,
+                    'confidence': dlib_movement.confidence,
+                    'magnitude': dlib_movement.magnitude,
+                    'timestamp': dlib_movement.timestamp,
+                    'start_position': (0, 0),  # dlib doesn't track positions, use default
+                    'end_position': (0, 0),
+                    'dx_pixels': 0,  # dlib doesn't provide pixel movement
+                    'dy_pixels': 0,
+                    'dx_norm': 0,
+                    'dy_norm': 0,
+                    'frame_indices': (0, 1),  # Placeholder
+                    'pose_data': dlib_movement.pose_data,
+                    'rotation_degrees': dlib_movement.rotation_degrees
                 }
                 movements.append(movement)
             
@@ -188,18 +192,26 @@ class OptimizedVideoProcessor:
             
             processing_time = time.time() - start_time
             
+            # Create performance metrics
+            performance_metrics = {
+                'frames_processed': dlib_result.frames_processed,
+                'processing_time': dlib_result.processing_time,
+                'movements_detected': len(movements),
+                'detector_type': 'dlib'
+            }
+            
             return VideoProcessingResult(
                 success=True,
                 movements=movements,
                 validation_result=validation_result,
-                performance_metrics=mediapipe_result.quality_metrics,
+                performance_metrics=performance_metrics,
                 processing_time=processing_time,
-                frames_processed=mediapipe_result.frames_processed,
-                optimization_applied={'mediapipe_detection': True}
+                frames_processed=dlib_result.frames_processed,
+                optimization_applied={'dlib_detection': True}
             )
             
         except Exception as e:
-            logger.error(f"MediaPipe processing failed: {e}")
+            logger.error(f"Dlib processing failed: {e}")
             return VideoProcessingResult(
                 success=False,
                 movements=[],
@@ -575,7 +587,7 @@ class OptimizedVideoProcessor:
 def create_optimized_processor(
     face_detector: Optional[FaceDetector] = None,
     performance_mode: str = 'balanced',
-    use_mediapipe: bool = True
+    use_dlib: bool = True
 ) -> OptimizedVideoProcessor:
     """
     Create optimized video processor with predefined configuration.
@@ -583,7 +595,7 @@ def create_optimized_processor(
     Args:
         face_detector: Face detector instance
         performance_mode: 'performance', 'memory', or 'balanced'
-        use_mediapipe: Use MediaPipe for head movement detection
+        use_dlib: Use dlib for head movement detection
         
     Returns:
         Configured optimized video processor
@@ -599,14 +611,14 @@ def create_optimized_processor(
         face_detector=face_detector,
         optimization_config=config,
         use_performance_mode=(performance_mode == 'performance'),
-        use_mediapipe=use_mediapipe
+        use_dlib=use_dlib
     )
 
 async def process_video_async(
     video_path: str,
     expected_sequence: Optional[List[str]] = None,
     performance_mode: str = 'balanced',
-    use_mediapipe: bool = True
+    use_dlib: bool = True
 ) -> VideoProcessingResult:
     """
     Asynchronously process video for liveness detection.
@@ -615,14 +627,14 @@ async def process_video_async(
         video_path: Path to video file
         expected_sequence: Expected movement sequence
         performance_mode: Performance optimization mode
-        use_mediapipe: Use MediaPipe for head movement detection
+        use_dlib: Use dlib for head movement detection
         
     Returns:
         Video processing result
     """
     processor = create_optimized_processor(
         performance_mode=performance_mode,
-        use_mediapipe=use_mediapipe
+        use_dlib=use_dlib
     )
     
     # Run in thread pool to avoid blocking

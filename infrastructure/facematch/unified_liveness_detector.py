@@ -94,15 +94,27 @@ class UnifiedLivenessDetector:
             except Exception as e:
                 logger.warning(f"Failed to initialize CRMNET detector: {e}")
             
-            # Import and initialize Simple/Video detector
+            # Import and initialize Simple/Image detector
             from .simple_liveness import SimpleLivenessDetector
             try:
                 simple_detector = SimpleLivenessDetector()
-                self._detectors[LivenessMode.VIDEO_MOVEMENT] = VideoLivenessAdapter(simple_detector)
                 self._detectors[LivenessMode.IMAGE_ANALYSIS] = ImageLivenessAdapter(simple_detector)
-                logger.info("Video and image liveness detectors initialized")
+                logger.info("Image liveness detector initialized")
             except Exception as e:
                 logger.warning(f"Failed to initialize simple liveness detector: {e}")
+            
+            # Import and initialize Dlib video movement detector
+            from .dlib_head_detector import create_dlib_detector
+            try:
+                dlib_detector = create_dlib_detector({
+                    'min_rotation_degrees': 15.0,
+                    'significant_rotation_degrees': 25.0,
+                    'debug_mode': False
+                })
+                self._detectors[LivenessMode.VIDEO_MOVEMENT] = DlibVideoMovementAdapter(dlib_detector)
+                logger.info("Dlib video movement detector initialized")
+            except Exception as e:
+                logger.warning(f"Failed to initialize dlib video movement detector: {e}")
             
             # Set default mode based on available detectors
             if LivenessMode.VIDEO_MOVEMENT in self._detectors:
@@ -748,6 +760,113 @@ class ImageLivenessAdapter(BaseLivenessDetector):
     
     def get_supported_modes(self) -> List[LivenessMode]:
         return [LivenessMode.IMAGE_ANALYSIS]
+    
+    def is_available(self) -> bool:
+        return self.detector is not None
+
+class DlibVideoMovementAdapter(BaseLivenessDetector):
+    """Adapter for dlib-based video movement detector."""
+    
+    def __init__(self, dlib_detector):
+        self.detector = dlib_detector
+    
+    def detect_liveness(self, input_data: str, **kwargs) -> VideoLivenessResult:
+        """Detect liveness using dlib head movement detection."""
+        try:
+            expected_sequence = kwargs.get('expected_sequence', [])
+            max_frames = kwargs.get('max_frames', None)
+            
+            # Process video with dlib detector
+            result = self.detector.process_video(input_data, max_frames=max_frames)
+            
+            if not result.success:
+                return VideoLivenessResult(
+                    success=False,
+                    passed=False,
+                    confidence=0.0,
+                    liveness_score=0.0,
+                    mode=LivenessMode.VIDEO_MOVEMENT,
+                    processing_time=result.processing_time,
+                    error=result.error
+                )
+            
+            # Convert dlib movements to sequence
+            detected_movements = [m.direction for m in result.movements]
+            
+            # Calculate sequence accuracy if expected sequence provided
+            sequence_accuracy = None
+            if expected_sequence:
+                # Simple accuracy calculation
+                matches = 0
+                for i, expected in enumerate(expected_sequence):
+                    if i < len(detected_movements) and detected_movements[i] == expected:
+                        matches += 1
+                sequence_accuracy = matches / len(expected_sequence) if expected_sequence else 0.0
+            
+            # Calculate overall liveness score based on movement detection
+            movement_count = len(detected_movements)
+            expected_count = len(expected_sequence) if expected_sequence else 4  # Default expectation
+            
+            # Score based on movement detection quality
+            liveness_score = min(movement_count / expected_count, 1.0) if expected_count > 0 else 0.0
+            if sequence_accuracy is not None:
+                liveness_score = (liveness_score + sequence_accuracy) / 2.0
+            
+            # Determine if liveness check passed
+            passed = liveness_score >= 0.6  # 60% threshold for passing
+            confidence = liveness_score
+            
+            # Prepare movement details
+            movement_details = {
+                'detected_movements': detected_movements,
+                'movement_count': movement_count,
+                'expected_count': expected_count,
+                'detection_rate': movement_count / max(expected_count, 1)
+            }
+            
+            # Add individual movement details
+            movement_details['movements'] = []
+            for i, movement in enumerate(result.movements):
+                movement_details['movements'].append({
+                    'direction': movement.direction,
+                    'confidence': movement.confidence,
+                    'magnitude': movement.magnitude,
+                    'timestamp': movement.timestamp,
+                    'pose_data': movement.pose_data
+                })
+            
+            return VideoLivenessResult(
+                success=True,
+                passed=passed,
+                confidence=confidence,
+                liveness_score=liveness_score,
+                mode=LivenessMode.VIDEO_MOVEMENT,
+                processing_time=result.processing_time,
+                detected_sequence=detected_movements,
+                expected_sequence=expected_sequence,
+                sequence_accuracy=sequence_accuracy,
+                movement_details=movement_details,
+                details={
+                    'frames_processed': result.frames_processed,
+                    'detector_type': 'dlib',
+                    'total_movements': movement_count
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Dlib video movement detection failed: {e}")
+            return VideoLivenessResult(
+                success=False,
+                passed=False,
+                confidence=0.0,
+                liveness_score=0.0,
+                mode=LivenessMode.VIDEO_MOVEMENT,
+                processing_time=0.0,
+                error=str(e)
+            )
+    
+    def get_supported_modes(self) -> List[LivenessMode]:
+        return [LivenessMode.VIDEO_MOVEMENT]
     
     def is_available(self) -> bool:
         return self.detector is not None
