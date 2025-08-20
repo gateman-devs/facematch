@@ -1292,49 +1292,44 @@ class SimpleLivenessDetector:
                 'method': 'Advanced 6DoF Head Pose Validation'
             }
         
-        # Calculate total video duration
+        # NON-TIME-BASED ANALYSIS: Analyze all movements detected in the video
+        # No time constraints - just check if the expected sequence was performed
         total_duration = head_pose_data_with_time[-1]['timestamp'] - head_pose_data_with_time[0]['timestamp']
-        direction_duration = total_duration / len(expected_sequence)
-        
-        # Each direction cycle has two phases: direction (2s) + look center (1.5s)
-        step_duration = 2.0  # Analyze 2 seconds when user should be looking in direction
         
         detected_sequence = []
         segment_accuracies = []
         
-        # Analyze each time segment (only the first half of each cycle when looking in direction)
-        for i, expected_direction in enumerate(expected_sequence):
-            start_time = head_pose_data_with_time[0]['timestamp'] + (i * direction_duration)
-            end_time = start_time + step_duration  # Only analyze first half of the cycle
+        # Extract all detected movements from the video
+        all_detected_movements = [data['direction'] for data in head_pose_data_with_time if data.get('direction') != 'center']
+        all_movement_confidences = [data['direction_confidence'] for data in head_pose_data_with_time if data.get('direction') != 'center']
+        
+        # For each expected direction, find the best matching detected movement
+        for expected_direction in expected_sequence:
+            # Find movements that match the expected direction
+            matching_movements = []
+            matching_confidences = []
             
-            # Get pose data for this time segment (when user should be looking in direction)
-            segment_data = [
-                data for data in head_pose_data_with_time 
-                if start_time <= data['timestamp'] <= end_time
-            ]
+            for i, detected_dir in enumerate(all_detected_movements):
+                if detected_dir == expected_direction:
+                    matching_movements.append(detected_dir)
+                    matching_confidences.append(all_movement_confidences[i])
             
-            if len(segment_data) < 3:
-                detected_sequence.append('insufficient_data')
-                segment_accuracies.append(0.0)
-                continue
-            
-            # Detect movement direction in this segment using advanced pose analysis
-            detected_direction, confidence = self._detect_advanced_movement_direction(segment_data, expected_direction)
-            detected_sequence.append(detected_direction)
-            
-            # Calculate accuracy for this segment
-            if detected_direction == expected_direction:
-                segment_accuracies.append(float(confidence))
+            if matching_movements:
+                # Use the highest confidence match
+                best_confidence = max(matching_confidences)
+                detected_sequence.append(expected_direction)
+                segment_accuracies.append(float(best_confidence))
             else:
-                # Partial credit for close directions or high confidence in wrong direction
-                partial_credit = max(0.0, confidence * 0.3)  # 30% credit for confident wrong detection
-                segment_accuracies.append(float(partial_credit))
+                # No matching movement found
+                detected_sequence.append('not_detected')
+                segment_accuracies.append(0.0)
         
         # Calculate overall accuracy
         overall_accuracy = float(np.mean(segment_accuracies)) if segment_accuracies else 0.0
         
-        # Pass if accuracy is above threshold (70% for advanced method)
-        passed = overall_accuracy >= 0.7 and len([acc for acc in segment_accuracies if acc > 0.5]) >= len(expected_sequence) * 0.6
+        # Pass if accuracy is above threshold (60% for non-time-based method)
+        # More lenient since we're not enforcing time constraints
+        passed = overall_accuracy >= 0.6 and len([acc for acc in segment_accuracies if acc > 0.3]) >= len(expected_sequence) * 0.5
         
         return {
             'passed': bool(passed),
@@ -1343,8 +1338,8 @@ class SimpleLivenessDetector:
             'expected_sequence': expected_sequence,
             'segment_accuracies': [float(acc) for acc in segment_accuracies],
             'total_duration': float(total_duration),
-            'direction_duration': float(direction_duration),
-            'method': 'Advanced 6DoF Head Pose Validation'
+            'direction_duration': None,  # No time constraints
+            'method': 'Non-Time-Based 6DoF Head Pose Validation'
         }
 
     def _detect_advanced_movement_direction(self, segment_data: List[Dict], expected_direction: str) -> Tuple[str, float]:

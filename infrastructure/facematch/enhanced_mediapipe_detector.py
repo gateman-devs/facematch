@@ -1,10 +1,10 @@
 """
-Enhanced MediaPipe Head Movement Detector
-Fixed version that properly discards return movements:
-- Only detects the main movements (down, left, right, up)
-- Discards return movements that bring face back to center
-- Filters out consecutive same directions
-- Only keeps movements with confidence >= 0.8
+Enhanced MediaPipe Head Movement Detector - Non-Time-Based Version
+Modified to remove time constraints and use degree-based detection:
+- No time-based expectations (2s, 1.5s, etc.)
+- Uses actual head rotation degrees (yaw/pitch) instead of pixel movement
+- Detects movements as they occur without time pressure
+- Configurable degree thresholds for head turns
 """
 
 import logging
@@ -23,9 +23,10 @@ class MovementResult:
     """Result of movement detection."""
     direction: str
     confidence: float
-    magnitude: float
+    magnitude: float  # Now represents degrees of rotation
     timestamp: float
     pose_data: Dict[str, float]
+    rotation_degrees: Dict[str, float]  # yaw, pitch, roll in degrees
 
 @dataclass
 class DetectionResult:
@@ -38,14 +39,16 @@ class DetectionResult:
 
 class EnhancedMediaPipeDetector:
     """
-    Enhanced MediaPipe-based head movement detector that discards return movements.
+    Enhanced MediaPipe-based head movement detector with degree-based detection.
+    No time constraints - detects movements as they occur.
     """
 
     def __init__(self,
                  min_detection_confidence: float = 0.5,
                  min_tracking_confidence: float = 0.5,
-                 movement_threshold: float = 0.009,  # Optimized threshold for both videos
-                 min_confidence_threshold: float = 0.8,
+                 min_rotation_degrees: float = 15.0,  # Minimum degrees for a valid head turn
+                 significant_rotation_degrees: float = 25.0,  # Degrees for significant movement classification
+                 min_confidence_threshold: float = 0.7,
                  max_history: int = 10,
                  debug_mode: bool = False):
         """
@@ -54,7 +57,8 @@ class EnhancedMediaPipeDetector:
         Args:
             min_detection_confidence: Minimum confidence for face detection
             min_tracking_confidence: Minimum confidence for face tracking
-            movement_threshold: Base movement magnitude threshold
+            min_rotation_degrees: Minimum degrees of head rotation to count as movement
+            significant_rotation_degrees: Degrees for significant movement classification
             min_confidence_threshold: Minimum confidence to keep a movement
             max_history: Maximum number of poses to keep in history
             debug_mode: Enable debug logging
@@ -67,18 +71,20 @@ class EnhancedMediaPipeDetector:
             min_tracking_confidence=min_tracking_confidence
         )
         
-        # Landmark indices
+        # Landmark indices for head pose calculation
         self.landmarks = {
             'nose_tip': 1,
             'chin': 18,
             'left_eye': 33,
             'right_eye': 263,
-            'forehead': 9
+            'forehead': 9,
+            'left_ear': 234,
+            'right_ear': 454
         }
         
-        # Movement detection parameters
-        self.base_movement_threshold = movement_threshold
-        self.movement_threshold = movement_threshold
+        # Degree-based movement detection parameters
+        self.min_rotation_degrees = min_rotation_degrees
+        self.significant_rotation_degrees = significant_rotation_degrees
         self.min_confidence_threshold = min_confidence_threshold
         self.debug_mode = debug_mode
         self.previous_pose = None
@@ -90,29 +96,26 @@ class EnhancedMediaPipeDetector:
         self.consecutive_count = 0
         self.max_consecutive_same_direction = 1  # Allow max 1 consecutive same direction
         
-        # Timing parameters
-        self.movement_cooldown = 0.3  # Increased cooldown to avoid return movements
-        self.last_movement_time = 0
-        
         # Quality parameters
-        self.min_eye_distance = 0.01
-        self.min_face_height = 0.01
         self.min_quality_score = 0.3
         
-        # Statistics
+        # Statistics tracking
         self.total_frames = 0
         self.frames_with_face = 0
-        self.movement_magnitudes = []
+        self.rotation_magnitudes = []
         self.face_sizes = []
         
-        # Center tracking - MODIFIED: Discard return movements
-        self.center_position = None
+        # Center position tracking (for return movement detection)
         self.initial_face_center = None
-        self.face_center_threshold = 0.1
-        self.return_movement_threshold = 0.05  # Strict threshold for return movements
+        self.face_center_threshold = 0.1  # Distance threshold for center position
+        self.return_movement_threshold = 0.05  # Distance threshold for return movements
         
-        logger.info("Enhanced MediaPipe detector initialized")
-    
+        # Movement cooldown (reduced since we're not time-constrained)
+        self.movement_cooldown = 0.1  # 100ms minimum between movements
+        self.last_movement_time = 0
+        
+        logger.info(f"Enhanced MediaPipe Detector initialized - Min rotation: {min_rotation_degrees}°, Significant: {significant_rotation_degrees}°")
+
     def _reset_state(self):
         """Reset detector state for new video."""
         self.previous_pose = None
@@ -120,17 +123,15 @@ class EnhancedMediaPipeDetector:
         self.pose_history.clear()
         self.last_direction = None
         self.consecutive_count = 0
-        self.last_movement_time = 0
-        self.center_position = None
-        self.initial_face_center = None
         self.total_frames = 0
         self.frames_with_face = 0
-        self.movement_magnitudes = []
+        self.rotation_magnitudes = []
         self.face_sizes = []
-        logger.info("Enhanced detector state reset")
-    
+        self.initial_face_center = None
+        self.last_movement_time = 0
+
     def _extract_head_pose(self, frame: np.ndarray) -> Optional[Dict[str, float]]:
-        """Extract head pose from frame using MediaPipe Face Mesh."""
+        """Extract head pose data from frame using MediaPipe."""
         try:
             # Convert BGR to RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -143,67 +144,152 @@ class EnhancedMediaPipeDetector:
             face_landmarks = results.multi_face_landmarks[0]
             
             # Extract key landmarks
-            nose_tip = face_landmarks.landmark[self.landmarks['nose_tip']]
-            chin = face_landmarks.landmark[self.landmarks['chin']]
-            left_eye = face_landmarks.landmark[self.landmarks['left_eye']]
-            right_eye = face_landmarks.landmark[self.landmarks['right_eye']]
-            forehead = face_landmarks.landmark[self.landmarks['forehead']]
+            landmarks = {}
+            for name, idx in self.landmarks.items():
+                landmark = face_landmarks.landmark[idx]
+                landmarks[name] = (landmark.x, landmark.y)
             
-            # Calculate head center (between eyes)
-            x_center = (left_eye.x + right_eye.x) / 2
-            y_center = (left_eye.y + right_eye.y) / 2
-            
-            # Calculate face metrics
-            eye_distance = np.sqrt((right_eye.x - left_eye.x)**2 + (right_eye.y - left_eye.y)**2)
-            face_height = abs(chin.y - forehead.y)
-            
-            # Quality validation
-            if eye_distance < self.min_eye_distance or face_height < self.min_face_height:
+            # Calculate head pose angles (yaw, pitch, roll)
+            pose_angles = self._calculate_head_pose_angles(landmarks, frame.shape)
+            if not pose_angles:
                 return None
             
-            # Calculate quality score
-            quality_score = min(eye_distance * 10, 1.0)
+            # Calculate face center position
+            nose_x, nose_y = landmarks['nose_tip']
             
-            pose_data = {
-                'x': x_center,
-                'y': y_center,
+            # Calculate eye distance for quality assessment
+            left_eye = landmarks['left_eye']
+            right_eye = landmarks['right_eye']
+            eye_distance = np.sqrt((right_eye[0] - left_eye[0])**2 + (right_eye[1] - left_eye[1])**2)
+            
+            # Calculate quality score
+            quality_score = self._calculate_quality_score(landmarks)
+            
+            return {
+                'x': nose_x,
+                'y': nose_y,
                 'eye_distance': eye_distance,
-                'face_height': face_height,
-                'quality_score': quality_score
+                'quality_score': quality_score,
+                'yaw': pose_angles['yaw'],
+                'pitch': pose_angles['pitch'],
+                'roll': pose_angles['roll'],
+                'yaw_confidence': pose_angles.get('yaw_confidence', 0.8),
+                'pitch_confidence': pose_angles.get('pitch_confidence', 0.8),
+                'roll_confidence': pose_angles.get('roll_confidence', 0.8)
             }
             
-            return pose_data
+        except Exception as e:
+            if self.debug_mode:
+                logger.debug(f"Head pose extraction failed: {e}")
+            return None
+
+    def _calculate_head_pose_angles(self, landmarks: Dict[str, Tuple[float, float]], frame_shape: Tuple[int, int, int]) -> Optional[Dict[str, float]]:
+        """Calculate head pose angles using face landmarks."""
+        try:
+            # Get key landmarks
+            left_eye = landmarks['left_eye']
+            right_eye = landmarks['right_eye']
+            nose = landmarks['nose_tip']
+            left_ear = landmarks['left_ear']
+            right_ear = landmarks['right_ear']
+            
+            # Calculate yaw (left-right rotation) from ear positions
+            ear_center_x = (left_ear[0] + right_ear[0]) / 2
+            nose_ear_offset = nose[0] - ear_center_x
+            
+            # Convert to degrees (assuming 0.1 offset = 15 degrees)
+            yaw_degrees = nose_ear_offset * 150  # Scale factor for degree conversion
+            
+            # Calculate pitch (up-down rotation) from eye positions
+            eye_center_y = (left_eye[1] + right_eye[1]) / 2
+            nose_eye_offset = nose[1] - eye_center_y
+            
+            # Convert to degrees (assuming 0.1 offset = 15 degrees)
+            pitch_degrees = nose_eye_offset * 150  # Scale factor for degree conversion
+            
+            # Calculate roll (tilt) from eye positions
+            eye_dy = right_eye[1] - left_eye[1]
+            eye_dx = right_eye[0] - left_eye[0]
+            roll_degrees = np.arctan2(eye_dy, eye_dx) * 180 / np.pi
+            
+            # Clamp angles to reasonable ranges
+            yaw_degrees = np.clip(yaw_degrees, -90, 90)
+            pitch_degrees = np.clip(pitch_degrees, -90, 90)
+            roll_degrees = np.clip(roll_degrees, -45, 45)
+            
+            return {
+                'yaw': yaw_degrees,
+                'pitch': pitch_degrees,
+                'roll': roll_degrees,
+                'yaw_confidence': 0.8,
+                'pitch_confidence': 0.8,
+                'roll_confidence': 0.8
+            }
             
         except Exception as e:
-            logger.warning(f"Failed to extract head pose: {e}")
+            if self.debug_mode:
+                logger.debug(f"Head pose angle calculation failed: {e}")
             return None
-    
-    def _calculate_adaptive_threshold(self, eye_distance: float) -> float:
-        """Calculate adaptive movement threshold based on face size."""
-        if eye_distance < 0.05:
-            return self.base_movement_threshold * 1.5
-        elif eye_distance > 0.15:
-            return self.base_movement_threshold * 0.7
-        else:
-            return self.base_movement_threshold
-    
-    def _detect_direction(self, dx: float, dy: float) -> str:
-        """Detect movement direction using angle-based approach."""
-        angle = np.arctan2(dy, dx) * 180 / np.pi
+
+    def _calculate_quality_score(self, landmarks: Dict[str, Tuple[float, float]]) -> float:
+        """Calculate quality score for landmark detection."""
+        try:
+            # Count number of landmarks detected
+            landmark_count = len(landmarks)
+            
+            # Calculate average distance between landmarks (should be reasonable)
+            distances = []
+            landmark_list = list(landmarks.values())
+            
+            for i in range(len(landmark_list)):
+                for j in range(i + 1, len(landmark_list)):
+                    dist = np.sqrt(
+                        (landmark_list[i][0] - landmark_list[j][0])**2 +
+                        (landmark_list[i][1] - landmark_list[j][1])**2
+                    )
+                    distances.append(dist)
+            
+            if distances:
+                avg_distance = np.mean(distances)
+                std_distance = np.std(distances)
+                
+                # Quality based on consistency of landmark distances
+                distance_consistency = max(0, 1 - std_distance / avg_distance) if avg_distance > 0 else 0
+            else:
+                distance_consistency = 0
+            
+            # Combine quality factors
+            quality_score = (
+                min(landmark_count / 10, 1.0) * 0.4 +  # Landmark count
+                distance_consistency * 0.6  # Distance consistency
+            )
+            
+            return min(max(quality_score, 0.0), 1.0)
+            
+        except Exception as e:
+            if self.debug_mode:
+                logger.debug(f"Quality score calculation failed: {e}")
+            return 0.5
+
+    def _detect_direction_from_rotation(self, yaw_degrees: float, pitch_degrees: float) -> str:
+        """Detect movement direction based on head rotation degrees."""
+        # Determine primary direction based on which rotation is larger
+        yaw_abs = abs(yaw_degrees)
+        pitch_abs = abs(pitch_degrees)
         
-        if angle < 0:
-            angle += 360
-        
-        # Direction ranges
-        if -45 <= angle < 45:
-            return 'right'
-        elif 45 <= angle < 135:
-            return 'down'
-        elif 135 <= angle < 225:
-            return 'left'
+        if yaw_abs > pitch_abs:
+            # Horizontal movement (left/right)
+            if yaw_degrees > 0:
+                return 'right'
+            else:
+                return 'left'
         else:
-            return 'up'
-    
+            # Vertical movement (up/down)
+            if pitch_degrees > 0:
+                return 'down'
+            else:
+                return 'up'
+
     def _is_consecutive_direction(self, direction: str) -> bool:
         """Check if this direction is consecutive to the last one."""
         if self.last_direction == direction:
@@ -212,7 +298,7 @@ class EnhancedMediaPipeDetector:
         else:
             self.consecutive_count = 1
             return False
-    
+
     def _is_return_movement(self, direction: str, current_pose: Dict[str, float]) -> bool:
         """
         Check if this is a return movement that should be discarded.
@@ -250,29 +336,37 @@ class EnhancedMediaPipeDetector:
                         return True
         
         return False
-    
-    def _calculate_confidence(self, direction: str, magnitude: float, pose_data: Dict[str, float]) -> float:
-        """Calculate confidence score for movement."""
-        # Base confidence from magnitude
-        magnitude_ratio = magnitude / self.movement_threshold
+
+    def _calculate_confidence(self, direction: str, rotation_magnitude: float, pose_data: Dict[str, float]) -> float:
+        """Calculate confidence score for movement based on rotation degrees."""
+        # Base confidence from rotation magnitude
+        magnitude_ratio = rotation_magnitude / self.min_rotation_degrees
         base_confidence = min(magnitude_ratio / 2.0, 1.0)
         
         # Quality boost
         quality_score = pose_data.get('quality_score', 0.5)
         quality_boost = quality_score * 0.3
         
-        # Size factor
+        # Rotation confidence boost
+        if direction in ['left', 'right']:
+            rotation_confidence = pose_data.get('yaw_confidence', 0.8)
+        else:  # up, down
+            rotation_confidence = pose_data.get('pitch_confidence', 0.8)
+        
+        rotation_boost = rotation_confidence * 0.2
+        
+        # Size factor based on rotation magnitude
         size_factor = 1.0
-        if magnitude > self.movement_threshold * 2.0:
+        if rotation_magnitude > self.significant_rotation_degrees:
             size_factor = 1.3
-        elif magnitude < self.movement_threshold * 1.2:
+        elif rotation_magnitude < self.min_rotation_degrees * 1.2:
             size_factor = 0.8
         
-        confidence = base_confidence * size_factor + quality_boost
+        confidence = base_confidence * size_factor + quality_boost + rotation_boost
         return min(max(confidence, 0.0), 1.0)
-    
+
     def detect_movement(self, current_pose: Dict[str, float], timestamp: float) -> Optional[MovementResult]:
-        """Detect movement with filtering that discards return movements."""
+        """Detect movement using degree-based rotation detection."""
         # Quality validation
         if current_pose.get('quality_score', 0) < self.min_quality_score:
             return None
@@ -283,33 +377,39 @@ class EnhancedMediaPipeDetector:
             self.initial_face_center = (current_pose['x'], current_pose['y'])
             return None
         
-        # Calculate movement
-        dx = current_pose['x'] - self.previous_pose['x']
-        dy = current_pose['y'] - self.previous_pose['y']
-        magnitude = np.sqrt(dx**2 + dy**2)
+        # Calculate rotation changes in degrees
+        yaw_change = abs(current_pose['yaw'] - self.previous_pose['yaw'])
+        pitch_change = abs(current_pose['pitch'] - self.previous_pose['pitch'])
         
-        # Update adaptive threshold
-        eye_distance = current_pose.get('eye_distance', 0.1)
-        self.movement_threshold = self._calculate_adaptive_threshold(eye_distance)
+        # Use the larger rotation as the primary movement
+        if yaw_change > pitch_change:
+            rotation_magnitude = yaw_change
+            primary_rotation = 'yaw'
+        else:
+            rotation_magnitude = pitch_change
+            primary_rotation = 'pitch'
         
         # Store statistics
-        self.movement_magnitudes.append(magnitude)
-        self.face_sizes.append(eye_distance)
+        self.rotation_magnitudes.append(rotation_magnitude)
+        self.face_sizes.append(current_pose.get('eye_distance', 0.1))
         
-        # Check if movement exceeds threshold
-        if magnitude < self.movement_threshold:
+        # Check if rotation exceeds minimum threshold
+        if rotation_magnitude < self.min_rotation_degrees:
             self.previous_pose = current_pose
             self.pose_history.append(current_pose)
             return None
         
-        # Check cooldown period
+        # Check cooldown period (reduced since we're not time-constrained)
         if timestamp - self.last_movement_time < self.movement_cooldown:
             self.previous_pose = current_pose
             self.pose_history.append(current_pose)
             return None
         
-        # Determine direction
-        direction = self._detect_direction(dx, dy)
+        # Determine direction from rotation
+        direction = self._detect_direction_from_rotation(
+            current_pose['yaw'] - self.previous_pose['yaw'],
+            current_pose['pitch'] - self.previous_pose['pitch']
+        )
         
         # Check for consecutive same direction
         if self._is_consecutive_direction(direction):
@@ -319,7 +419,7 @@ class EnhancedMediaPipeDetector:
             self.pose_history.append(current_pose)
             return None
         
-        # MODIFIED: Discard return movements
+        # Check for return movements
         if self._is_return_movement(direction, current_pose):
             if self.debug_mode:
                 logger.debug(f"Return movement discarded: {direction}")
@@ -328,7 +428,7 @@ class EnhancedMediaPipeDetector:
             return None
         
         # Calculate confidence
-        confidence = self._calculate_confidence(direction, magnitude, current_pose)
+        confidence = self._calculate_confidence(direction, rotation_magnitude, current_pose)
         
         # Filter by confidence threshold
         if confidence < self.min_confidence_threshold:
@@ -342,9 +442,14 @@ class EnhancedMediaPipeDetector:
         movement = MovementResult(
             direction=direction,
             confidence=confidence,
-            magnitude=magnitude,
+            magnitude=rotation_magnitude,  # Now represents degrees
             timestamp=timestamp,
-            pose_data=current_pose
+            pose_data=current_pose,
+            rotation_degrees={
+                'yaw': current_pose['yaw'],
+                'pitch': current_pose['pitch'],
+                'roll': current_pose['roll']
+            }
         )
         
         # Update state
@@ -355,7 +460,7 @@ class EnhancedMediaPipeDetector:
         self.last_direction = direction
         
         if self.debug_mode:
-            logger.debug(f"Movement detected: {direction} (confidence: {confidence:.3f}, magnitude: {magnitude:.4f})")
+            logger.debug(f"Movement detected: {direction} ({rotation_magnitude:.1f}° rotation, confidence: {confidence:.3f})")
         
         return movement
     
