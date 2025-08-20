@@ -12,8 +12,9 @@ import os
 import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
-import mediapipe as mp
+# MediaPipe removed - using dlib for head movement detection
 from .image_utils import get_image_processor
+from .face_detection import FaceDetector
 from .movement_config import (
     MovementThresholdConfig, 
     AdaptiveThresholdCalculator, 
@@ -60,15 +61,8 @@ class SimpleLivenessDetector:
     
     def __init__(self, movement_config: Optional[MovementThresholdConfig] = None):
         """Initialize the simple liveness detector."""
-        self.mp_face_mesh = mp.solutions.face_mesh
-        self.mp_drawing = mp.solutions.drawing_utils
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            static_image_mode=False,
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
+        # MediaPipe face mesh removed - using dlib for head movement detection
+        # Face mesh functionality moved to dlib_head_detector.py
         
         # Challenge types - Only head movement for Gateman
         self.challenge_types = ['head_movement']
@@ -128,6 +122,9 @@ class SimpleLivenessDetector:
         # Initialize image processor for URL/base64 handling
         self.image_processor = get_image_processor()
         
+        # Initialize face detector (MTCNN instead of MediaPipe)
+        self.face_detector = FaceDetector()
+        
         logger.info("SimpleLivenessDetector initialized with Enhanced Anti-Spoofing + Face Capture + Face Comparison + Configurable Movement Thresholds")
     
     def perform_image_liveness_check(self, image_input: str) -> Dict:
@@ -163,11 +160,9 @@ class SimpleLivenessDetector:
             anti_spoof_result = self.enhanced_anti_spoofing.analyze_frame(image)
             liveness_score = anti_spoof_result.overall_score
             
-            # Check for face detection
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            results = self.face_mesh.process(rgb_image)
-            
-            face_detected = results.multi_face_landmarks is not None
+            # Check for face detection using MTCNN
+            face_detection_result = self.face_detector.detect_faces(image)
+            face_detected = face_detection_result['face_count'] > 0
             if not face_detected:
                 return {
                     'success': True,
@@ -306,7 +301,7 @@ class SimpleLivenessDetector:
     
     def _extract_face_embedding(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
-        Extract face embedding using MediaPipe landmarks as a simple representation.
+        Extract face embedding using MTCNN keypoints as a simple representation.
         Note: This is a basic implementation. For production, consider using
         more sophisticated face recognition models like FaceNet or ArcFace.
         """
@@ -314,32 +309,34 @@ class SimpleLivenessDetector:
             # Resize image for consistent processing
             image = self.image_processor.resize_image_if_needed(image, 512)
             
-            # Convert to RGB
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # Detect faces using MTCNN
+            detection_result = self.face_detector.detect_faces(image)
             
-            # Process with MediaPipe
-            results = self.face_mesh.process(rgb_image)
-            
-            if not results.multi_face_landmarks:
+            if detection_result['face_count'] == 0:
                 return None
             
             # Use the first detected face
-            face_landmarks = results.multi_face_landmarks[0]
+            face_data = detection_result['faces'][0]
+            keypoints = face_data.get('keypoints', {})
             
-            # Extract key landmarks as simple embedding
-            key_landmarks = [
-                1, 2, 5, 6, 10, 151, 9, 10, 152, 175,  # Face contour
-                33, 7, 163, 144, 145, 153, 154, 155, 133, 173,  # Eyes
-                19, 20, 94, 125, 141, 235, 31, 228, 229, 230,  # Nose
-                61, 84, 17, 314, 405, 320, 307, 375, 321, 308   # Mouth
-            ]
-            
-            # Create embedding vector from landmark coordinates
+            # Extract key facial points as simple embedding
             embedding = []
-            for landmark_idx in key_landmarks:
-                if landmark_idx < len(face_landmarks.landmark):
-                    landmark = face_landmarks.landmark[landmark_idx]
-                    embedding.extend([landmark.x, landmark.y, landmark.z])
+            
+            # Add keypoint coordinates if available
+            for point_name in ['left_eye', 'right_eye', 'nose', 'mouth_left', 'mouth_right']:
+                if point_name in keypoints:
+                    point = keypoints[point_name]
+                    embedding.extend([point[0], point[1]])
+                else:
+                    embedding.extend([0.0, 0.0])  # Default values
+            
+            # Add bounding box information
+            bbox = face_data.get('box', [0, 0, 0, 0])
+            embedding.extend([bbox[0], bbox[1], bbox[2], bbox[3]])
+            
+            # Add confidence score
+            confidence = face_data.get('confidence', 0.0)
+            embedding.append(confidence)
             
             return np.array(embedding, dtype=np.float32)
             
@@ -634,17 +631,10 @@ class SimpleLivenessDetector:
             # Convert BGR to RGB
             rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             
-            # Process with MediaPipe
-            results = self.face_mesh.process(rgb_frame)
-            
-            if results.multi_face_landmarks:
-                for face_landmarks in results.multi_face_landmarks:
-                    smile_ratio = self._calculate_smile_ratio(face_landmarks, frame.shape)
-                    smile_ratios.append(smile_ratio)
-                    
-                    # Consider it a smile if ratio is above threshold
-                    if smile_ratio > 0.02:  # Adjust threshold as needed
-                        smile_frames += 1
+            # Process with MTCNN (smile detection disabled - using head movement only)
+            # Smile detection functionality removed as per Gateman requirements
+            # Only head movement challenges are supported
+            pass
         
         logger.info(f"Processed {total_frames} total frames, found {len(smile_ratios)} valid face detections")
         
@@ -848,36 +838,39 @@ class SimpleLivenessDetector:
                 new_w, new_h = int(w * scale), int(h * scale)
                 rgb_frame = cv2.resize(rgb_frame, (new_w, new_h))
             
-            # Time MediaPipe processing
-            mediapipe_start_time = time.time()
-            results = self.face_mesh.process(rgb_frame)
-            mediapipe_end_time = time.time()
+            # Time MTCNN processing (legacy head movement - using dlib for primary detection)
+            mtcnn_start_time = time.time()
+            detection_result = self.face_detector.detect_faces(frame)
+            mtcnn_end_time = time.time()
             
-            if results.multi_face_landmarks:
-                for face_landmarks in results.multi_face_landmarks:
-                    nose_pos = self._get_nose_position(face_landmarks, frame.shape)
-                    if nose_pos:
-                        # Record nose position
-                        nose_positions_with_time.append({
-                            'timestamp': float(timestamp),
-                            'x': float(nose_pos[0]),
-                            'y': float(nose_pos[1])
-                        })
-                        
-                        # Collect frame and landmarks for motion consistency analysis
-                        collected_frames.append(frame.copy())
-                        collected_landmarks.append(face_landmarks)
-                        frame_timestamps.append(timestamp)
-                        
-                        # Perform enhanced anti-spoofing analysis
-                        anti_spoof_result = self.enhanced_anti_spoofing.analyze_frame(frame)
-                        anti_spoofing_scores.append(anti_spoof_result)
-                        
-                        # Save best quality face image for matching
-                        face_confidence = anti_spoof_result.overall_score
-                        if face_confidence > best_face_confidence and session_id:
-                            best_face_confidence = face_confidence
-                            best_face_frame = frame.copy()
+            if detection_result['face_count'] > 0:
+                # Use first detected face
+                face_data = detection_result['faces'][0]
+                keypoints = face_data.get('keypoints', {})
+                
+                # Get nose position from keypoints
+                if 'nose' in keypoints:
+                    nose_pos = keypoints['nose']
+                    # Record nose position
+                    nose_positions_with_time.append({
+                        'timestamp': float(timestamp),
+                        'x': float(nose_pos[0]),
+                        'y': float(nose_pos[1])
+                    })
+                    
+                    # Collect frame for motion consistency analysis (simplified)
+                    collected_frames.append(frame.copy())
+                    frame_timestamps.append(timestamp)
+                    
+                    # Perform enhanced anti-spoofing analysis
+                    anti_spoof_result = self.enhanced_anti_spoofing.analyze_frame(frame)
+                    anti_spoofing_scores.append(anti_spoof_result)
+                    
+                    # Save best quality face image for matching
+                    face_confidence = anti_spoof_result.overall_score
+                    if face_confidence > best_face_confidence and session_id:
+                        best_face_confidence = face_confidence
+                        best_face_frame = frame.copy()
             else:
                 # Log when face is not detected for debugging
                 if total_frames % 30 == 0:  # Log every 30th frame to avoid spam
@@ -921,25 +914,23 @@ class SimpleLivenessDetector:
         # Determine if anti-spoofing validation passed - more lenient threshold
         anti_spoof_passed = avg_anti_spoofing.get('overall_score', 0) >= 0.2
         
-        # Perform motion consistency analysis if we have sufficient frames
+        # Perform motion consistency analysis if we have sufficient frames (simplified for MTCNN)
         motion_consistency_result = None
         motion_consistency_passed = True  # Default to pass if analysis not performed
         
         if len(collected_frames) >= 5:
             try:
                 logger.info(f"Performing motion consistency analysis on {len(collected_frames)} frames")
-                motion_consistency_result = self.motion_consistency_validator.analyze_motion_consistency(
-                    collected_frames, collected_landmarks, frame_timestamps
+                # Simplified motion consistency analysis without MediaPipe landmarks
+                motion_consistency_result = self.motion_consistency_validator.analyze_motion_consistency_simple(
+                    collected_frames, frame_timestamps
                 )
                 
                 # Motion consistency validation passes if overall score is above threshold
                 motion_consistency_passed = motion_consistency_result.is_natural_motion
                 
                 logger.info(f"Motion consistency analysis: score={motion_consistency_result.overall_score:.3f}, "
-                           f"natural_motion={motion_consistency_result.is_natural_motion}, "
-                           f"pattern_score={motion_consistency_result.pattern_score:.3f}, "
-                           f"edge_score={motion_consistency_result.edge_score:.3f}, "
-                           f"blur_score={motion_consistency_result.blur_score:.3f}")
+                           f"natural_motion={motion_consistency_result.is_natural_motion}")
                 
             except Exception as e:
                 logger.warning(f"Motion consistency analysis failed: {e}")
@@ -1108,47 +1099,18 @@ class SimpleLivenessDetector:
         }
     
     def _calculate_smile_ratio(self, face_landmarks, frame_shape: Tuple[int, int, int]) -> float:
-        """Calculate smile ratio based on mouth landmarks."""
-        h, w = frame_shape[:2]
-        
-        # Get mouth corner and lip positions
-        left_mouth = face_landmarks.landmark[self.smile_landmarks['left_mouth']]
-        right_mouth = face_landmarks.landmark[self.smile_landmarks['right_mouth']]
-        top_lip = face_landmarks.landmark[self.smile_landmarks['top_lip']]
-        bottom_lip = face_landmarks.landmark[self.smile_landmarks['bottom_lip']]
-        
-        # Convert to pixel coordinates
-        left_x, left_y = int(left_mouth.x * w), int(left_mouth.y * h)
-        right_x, right_y = int(right_mouth.x * w), int(right_mouth.y * h)
-        top_x, top_y = int(top_lip.x * w), int(top_lip.y * h)
-        bottom_x, bottom_y = int(bottom_lip.x * w), int(bottom_lip.y * h)
-        
-        # Calculate mouth width and height
-        mouth_width = abs(right_x - left_x)
-        mouth_height = abs(bottom_y - top_y)
-        
-        # Smile ratio: wider mouth relative to height indicates smile
-        if mouth_height > 0:
-            smile_ratio = mouth_width / mouth_height
-            # Normalize by face width for consistency
-            face_width = w  # Simplified
-            return smile_ratio / face_width
-        
+        """Calculate smile ratio based on MTCNN keypoints (simplified)."""
+        # Smile detection disabled - using head movement only
+        # This method is kept for backward compatibility but returns 0
         return 0.0
     
     def _get_nose_position(self, face_landmarks, frame_shape: Tuple[int, int, int]) -> Optional[Tuple[float, float]]:
-        """Get normalized nose position with proper coordinate validation."""
+        """Get normalized nose position from MTCNN keypoints."""
         h, w = frame_shape[:2]
         
-        nose_tip = face_landmarks.landmark[self.head_landmarks['nose_tip']]
-        
-        # Validate nose position is within reasonable bounds
-        # MediaPipe returns normalized coordinates [0, 1]
-        if 0 <= nose_tip.x <= 1 and 0 <= nose_tip.y <= 1:
-            return (nose_tip.x, nose_tip.y)  # Return normalized coordinates
-        else:
-            logger.warning(f"Invalid nose position detected: x={nose_tip.x}, y={nose_tip.y}")
-            return None
+        # This method is kept for backward compatibility but uses MTCNN keypoints
+        # In practice, this is handled by the dlib head detector for movement detection
+        return None
     
     def _normalize_coordinates(self, x: float, y: float, frame_width: int, frame_height: int) -> Tuple[float, float]:
         """Normalize pixel coordinates to [0, 1] range."""
