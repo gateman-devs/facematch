@@ -278,17 +278,17 @@ class EnhancedMediaPipeDetector:
         pitch_abs = abs(pitch_degrees)
         
         if yaw_abs > pitch_abs:
-            # Horizontal movement (left/right)
+            # Horizontal movement (left/right) - SWAPPED: left for right, right for left
             if yaw_degrees > 0:
-                return 'right'
+                return 'left'  # SWAPPED: was 'right'
             else:
-                return 'left'
+                return 'right'  # SWAPPED: was 'left'
         else:
-            # Vertical movement (up/down)
+            # Vertical movement (up/down) - SWAPPED: up for down, down for up
             if pitch_degrees > 0:
-                return 'down'
+                return 'up'  # SWAPPED: was 'down'
             else:
-                return 'up'
+                return 'down'  # SWAPPED: was 'up'
 
     def _is_consecutive_direction(self, direction: str) -> bool:
         """Check if this direction is consecutive to the last one."""
@@ -464,6 +464,75 @@ class EnhancedMediaPipeDetector:
         
         return movement
     
+    def _post_process_movements(self, movements: List[MovementResult]) -> List[MovementResult]:
+        """
+        Post-process movements to apply the three improvements:
+        1. Deduplicate consecutive movements (only record 1 direction)
+        2. Reverse the order (last to first)
+        3. Remove opposite directions and duplicates
+        """
+        if not movements:
+            return []
+        
+        # Step 1: Deduplicate consecutive movements
+        # If we see up, up, up, just take 1 up. left, left, left, just take 1 left
+        deduplicated = []
+        current_direction = None
+        
+        for movement in movements:
+            if movement.direction != current_direction:
+                deduplicated.append(movement)
+                current_direction = movement.direction
+        
+        if self.debug_mode:
+            logger.debug(f"Deduplication: {len(movements)} -> {len(deduplicated)} movements")
+        
+        # Step 2: Reverse the order (last to first)
+        reversed_movements = list(reversed(deduplicated))
+        
+        if self.debug_mode:
+            logger.debug(f"Reversed order: {[m.direction for m in reversed_movements]}")
+        
+        # Step 3: Remove opposite directions and duplicates
+        # Don't generate left then right or up and up, etc.
+        filtered_movements = []
+        opposite_pairs = [
+            ('left', 'right'),
+            ('right', 'left'),
+            ('up', 'down'),
+            ('down', 'up')
+        ]
+        
+        for i, movement in enumerate(reversed_movements):
+            # Check if this movement is opposite to the previous one
+            if i > 0:
+                prev_movement = filtered_movements[-1]
+                is_opposite = False
+                
+                for dir1, dir2 in opposite_pairs:
+                    if (prev_movement.direction == dir1 and movement.direction == dir2) or \
+                       (prev_movement.direction == dir2 and movement.direction == dir1):
+                        is_opposite = True
+                        break
+                
+                if is_opposite:
+                    if self.debug_mode:
+                        logger.debug(f"Removing opposite direction: {prev_movement.direction} -> {movement.direction}")
+                    continue
+            
+            # Check if this movement is the same as the previous one
+            if i > 0 and movement.direction == filtered_movements[-1].direction:
+                if self.debug_mode:
+                    logger.debug(f"Removing duplicate direction: {movement.direction}")
+                continue
+            
+            filtered_movements.append(movement)
+        
+        if self.debug_mode:
+            logger.debug(f"Final filtered movements: {[m.direction for m in filtered_movements]}")
+        
+        return filtered_movements
+    
     def process_video(self, video_path: str) -> DetectionResult:
         """Process video for head movement detection."""
         start_time = time.time()
@@ -515,11 +584,18 @@ class EnhancedMediaPipeDetector:
             
             processing_time = time.time() - start_time
             
-            logger.info(f"Video processing completed: {len(movements)} movements in {processing_time:.3f}s")
+            # POST-PROCESSING: Apply the three improvements
+            # 1. Deduplicate consecutive movements (only record 1 direction)
+            # 2. Reverse the order (last to first)
+            # 3. Remove opposite directions and duplicates
+            
+            processed_movements = self._post_process_movements(movements)
+            
+            logger.info(f"Video processing completed: {len(movements)} raw movements -> {len(processed_movements)} processed movements in {processing_time:.3f}s")
             
             return DetectionResult(
                 success=True,
-                movements=movements,
+                movements=processed_movements,
                 processing_time=processing_time,
                 frames_processed=frames_processed
             )

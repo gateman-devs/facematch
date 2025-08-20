@@ -1303,16 +1303,22 @@ class SimpleLivenessDetector:
         all_detected_movements = [data['direction'] for data in head_pose_data_with_time if data.get('direction') != 'center']
         all_movement_confidences = [data['direction_confidence'] for data in head_pose_data_with_time if data.get('direction') != 'center']
         
+        # Apply post-processing improvements:
+        # 1. Deduplicate consecutive movements (only record 1 direction)
+        # 2. Reverse the order (last to first)
+        # 3. Remove opposite directions and duplicates
+        processed_movements, processed_confidences = self._post_process_movements(all_detected_movements, all_movement_confidences)
+        
         # For each expected direction, find the best matching detected movement
         for expected_direction in expected_sequence:
             # Find movements that match the expected direction
             matching_movements = []
             matching_confidences = []
             
-            for i, detected_dir in enumerate(all_detected_movements):
+            for i, detected_dir in enumerate(processed_movements):
                 if detected_dir == expected_direction:
                     matching_movements.append(detected_dir)
-                    matching_confidences.append(all_movement_confidences[i])
+                    matching_confidences.append(processed_confidences[i])
             
             if matching_movements:
                 # Use the highest confidence match
@@ -1390,6 +1396,67 @@ class SimpleLivenessDetector:
         final_confidence = (consistency * 0.6 + avg_direction_confidence * 0.4)
         
         return str(most_common_direction), float(final_confidence)
+
+    def _post_process_movements(self, movements: List[str], confidences: List[float]) -> Tuple[List[str], List[float]]:
+        """
+        Post-process movements to apply the three improvements:
+        1. Deduplicate consecutive movements (only record 1 direction)
+        2. Reverse the order (last to first)
+        3. Remove opposite directions and duplicates
+        """
+        if not movements:
+            return [], []
+        
+        # Step 1: Deduplicate consecutive movements
+        # If we see up, up, up, just take 1 up. left, left, left, just take 1 left
+        deduplicated_movements = []
+        deduplicated_confidences = []
+        current_direction = None
+        
+        for i, movement in enumerate(movements):
+            if movement != current_direction:
+                deduplicated_movements.append(movement)
+                deduplicated_confidences.append(confidences[i])
+                current_direction = movement
+        
+        # Step 2: Reverse the order (last to first)
+        reversed_movements = list(reversed(deduplicated_movements))
+        reversed_confidences = list(reversed(deduplicated_confidences))
+        
+        # Step 3: Remove opposite directions and duplicates
+        # Don't generate left then right or up and up, etc.
+        filtered_movements = []
+        filtered_confidences = []
+        opposite_pairs = [
+            ('left', 'right'),
+            ('right', 'left'),
+            ('up', 'down'),
+            ('down', 'up')
+        ]
+        
+        for i, movement in enumerate(reversed_movements):
+            # Check if this movement is opposite to the previous one
+            if i > 0:
+                prev_movement = filtered_movements[-1]
+                is_opposite = False
+                
+                for dir1, dir2 in opposite_pairs:
+                    if (prev_movement == dir1 and movement == dir2) or \
+                       (prev_movement == dir2 and movement == dir1):
+                        is_opposite = True
+                        break
+                
+                if is_opposite:
+                    continue
+            
+            # Check if this movement is the same as the previous one
+            if i > 0 and movement == filtered_movements[-1]:
+                continue
+            
+            filtered_movements.append(movement)
+            filtered_confidences.append(reversed_confidences[i])
+        
+        return filtered_movements, filtered_confidences
 
     def _validate_movement_sequence(self, nose_positions_with_time: List[Dict], expected_sequence: List[str], adaptive_thresholds: Optional[Dict[str, float]] = None, frame_context: Optional[Dict[str, Any]] = None) -> Dict:
         """
