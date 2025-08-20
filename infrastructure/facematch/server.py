@@ -1104,8 +1104,8 @@ async def create_simple_challenge():
         if challenge['type'] == 'head_movement' and 'movement_sequence' in challenge:
             import urllib.parse
             sequence_param = urllib.parse.quote(json.dumps(challenge['movement_sequence']))
-            direction_duration = challenge.get('direction_duration', 3.5)
-            challenge_url += f"&sequence={sequence_param}&direction_duration={direction_duration}"
+            movement_type = challenge.get('movement_type', 'center_to_center')
+            challenge_url += f"&sequence={sequence_param}&movement_type={movement_type}"
         
         response_data = {
             'success': True,
@@ -1120,7 +1120,7 @@ async def create_simple_challenge():
         # Include movement sequence in response for head movement challenges
         if challenge['type'] == 'head_movement' and 'movement_sequence' in challenge:
             response_data['movement_sequence'] = challenge['movement_sequence']
-            response_data['direction_duration'] = challenge.get('direction_duration', 3.5)
+            response_data['movement_type'] = challenge.get('movement_type', 'center_to_center')
         
         logger.info(f"Created simple {challenge['type']} challenge: {session_id}")
         return response_data

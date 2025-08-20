@@ -33,7 +33,8 @@ from .flexible_sequence_validator import (
     FlexibleSequenceValidator,
     ValidationConfig,
     create_flexible_sequence_validator,
-    create_default_validation_config
+    create_default_validation_config,
+    create_center_to_center_validation_config
 )
 from .motion_consistency import (
     MotionConsistencyValidator,
@@ -80,8 +81,8 @@ class SimpleLivenessDetector:
         # Initialize comprehensive movement confidence scoring system
         self.confidence_scorer = create_confidence_scorer()
         
-        # Initialize flexible sequence validator for enhanced sequence validation
-        self.sequence_validator = create_flexible_sequence_validator(create_default_validation_config())
+        # Initialize flexible sequence validator for enhanced sequence validation with center-to-center config
+        self.sequence_validator = create_flexible_sequence_validator(create_center_to_center_validation_config())
         
         # Initialize motion consistency validator for detecting artificial motion and video artifacts
         self.motion_consistency_validator = create_motion_consistency_validator(create_default_motion_consistency_config())
@@ -477,17 +478,17 @@ class SimpleLivenessDetector:
         sequence_length = 4  # Always exactly 4 directions
         movement_sequence = [random.choice(directions) for _ in range(sequence_length)]
         
-        duration = len(movement_sequence) * 3.5  # 3.5 seconds per direction (2s look + 1.5s center)
-        instruction = f"Follow the directional prompts: {' → '.join(movement_sequence)}"
+        instruction = f"Move your head in this sequence, starting and ending at center: {' → '.join(movement_sequence)}"
         
         return {
             'type': 'head_movement',
             'instruction': instruction,
-            'duration': duration,
-            'description': 'Move your head in the exact sequence shown',
+            'duration': 30,  # Flexible duration - no time constraints
+            'description': 'Move your head in the exact sequence shown, starting and ending at center position',
             'movement_sequence': movement_sequence,
-            'direction_duration': 3.5,
-            'anti_spoofing': True  # Enable enhanced validation
+            'direction_duration': None,  # No time constraints
+            'anti_spoofing': True,  # Enable enhanced validation
+            'movement_type': 'center_to_center'  # New movement type
         }
     
     def validate_video_challenge(self, video_path: str, challenge_type: str, movement_sequence: List[str] = None, session_id: str = None, reference_image: str = None) -> Dict:
@@ -1397,16 +1398,15 @@ class SimpleLivenessDetector:
 
     def _validate_movement_sequence(self, nose_positions_with_time: List[Dict], expected_sequence: List[str], adaptive_thresholds: Optional[Dict[str, float]] = None, frame_context: Optional[Dict[str, Any]] = None) -> Dict:
         """
-        Enhanced flexible sequence validation algorithm that replaces rigid time-based segmentation.
-        Uses advanced sliding window analysis to detect required sequence anywhere in the video
-        with comprehensive tolerance for extra movements, timing variations, pauses, and speed differences.
+        Enhanced flexible sequence validation algorithm using center-to-center movement detection.
+        Records any movement that starts from center, moves to a direction, and returns to center.
+        This removes time-based constraints and focuses on natural movement patterns.
         
         This implementation addresses requirements:
-        - 2.1: Timing variation tolerance
-        - 2.2: Extra movement filtering  
-        - 2.3: Pause tolerance
-        - 2.4: Speed adaptation
-        - 2.5: Sequence detection anywhere in video
+        - Center-to-center movement patterns
+        - No time-based constraints
+        - Natural movement detection
+        - Flexible sequence matching
         """
         if not nose_positions_with_time or not expected_sequence:
             return {
@@ -1416,8 +1416,8 @@ class SimpleLivenessDetector:
                 'error': 'Insufficient data for sequence validation'
             }
         
-        # Detect all significant movements throughout the video using adaptive thresholds
-        all_movements = self._detect_all_movements(nose_positions_with_time, adaptive_thresholds, frame_context)
+        # Detect all center-to-center movements throughout the video
+        all_movements = self._detect_center_to_center_movements(nose_positions_with_time, adaptive_thresholds, frame_context)
         
         if not all_movements:
             logger.info("No significant movements detected in video")
@@ -1740,6 +1740,183 @@ class SimpleLivenessDetector:
                    f"{len(final_movements)} after temporal filtering")
         
         return final_movements
+
+    def _detect_center_to_center_movements(self, nose_positions_with_time: List[Dict], adaptive_thresholds: Optional[Dict[str, float]] = None, frame_context: Optional[Dict[str, Any]] = None) -> List[Dict]:
+        """
+        Detect head movements based on center-to-center patterns.
+        Records any movement that starts from center, moves to a direction, and returns to center.
+        This removes time-based constraints and focuses on movement patterns.
+        """
+        if len(nose_positions_with_time) < 10:
+            return []
+        
+        # Use adaptive thresholds if provided, otherwise use base configuration
+        if adaptive_thresholds is None:
+            adaptive_thresholds = self.adaptive_calculator._get_base_thresholds()
+        
+        # Reset confidence scorer for new video analysis
+        self.confidence_scorer.reset_temporal_state()
+        
+        movements = []
+        
+        # Calculate center position (average of all positions)
+        all_x = [pos['x'] for pos in nose_positions_with_time]
+        all_y = [pos['y'] for pos in nose_positions_with_time]
+        center_x = np.mean(all_x)
+        center_y = np.mean(all_y)
+        
+        # Define center tolerance (how close to center is considered "center")
+        center_tolerance = 0.05  # 5% of frame size
+        
+        # Get frame scaling factors
+        frame_scale_x = adaptive_thresholds.get('frame_scale_x', 1.0)
+        frame_scale_y = adaptive_thresholds.get('frame_scale_y', 1.0)
+        frame_width = int(self.movement_config.base_frame_width * frame_scale_x)
+        frame_height = int(self.movement_config.base_frame_height * frame_scale_y)
+        
+        # Convert center tolerance to normalized coordinates
+        center_tolerance_x = center_tolerance / frame_scale_x
+        center_tolerance_y = center_tolerance / frame_scale_y
+        
+        logger.info(f"Center position: ({center_x:.3f}, {center_y:.3f}), tolerance: ({center_tolerance_x:.3f}, {center_tolerance_y:.3f})")
+        
+        # Find center-to-center movement patterns
+        i = 0
+        while i < len(nose_positions_with_time):
+            # Look for a position that's close to center (start of movement)
+            if self._is_near_center(nose_positions_with_time[i], center_x, center_y, center_tolerance_x, center_tolerance_y):
+                # Found potential start of movement, look for the pattern
+                movement_pattern = self._find_center_to_center_pattern(
+                    nose_positions_with_time, i, center_x, center_y, 
+                    center_tolerance_x, center_tolerance_y, adaptive_thresholds, frame_context
+                )
+                
+                if movement_pattern:
+                    movements.append(movement_pattern)
+                    # Skip to the end of this movement pattern
+                    i = movement_pattern['end_index'] + 1
+                else:
+                    i += 1
+            else:
+                i += 1
+        
+        logger.info(f"Detected {len(movements)} center-to-center movements")
+        return movements
+    
+    def _is_near_center(self, position: Dict, center_x: float, center_y: float, tolerance_x: float, tolerance_y: float) -> bool:
+        """Check if a position is near the center."""
+        dx = abs(position['x'] - center_x)
+        dy = abs(position['y'] - center_y)
+        return dx <= tolerance_x and dy <= tolerance_y
+    
+    def _find_center_to_center_pattern(self, positions: List[Dict], start_index: int, center_x: float, center_y: float, 
+                                     tolerance_x: float, tolerance_y: float, adaptive_thresholds: Dict, 
+                                     frame_context: Optional[Dict] = None) -> Optional[Dict]:
+        """
+        Find a complete center-to-center movement pattern starting from start_index.
+        Pattern: Center -> Direction -> Center
+        """
+        if start_index >= len(positions) - 5:  # Need at least 5 positions for a pattern
+            return None
+        
+        # Get frame scaling factors
+        frame_scale_x = adaptive_thresholds.get('frame_scale_x', 1.0)
+        frame_scale_y = adaptive_thresholds.get('frame_scale_y', 1.0)
+        frame_width = int(self.movement_config.base_frame_width * frame_scale_x)
+        frame_height = int(self.movement_config.base_frame_height * frame_scale_y)
+        
+        # Find the maximum movement point (furthest from center)
+        max_movement_index = start_index
+        max_distance = 0
+        
+        for i in range(start_index, len(positions)):
+            pos = positions[i]
+            distance = np.sqrt((pos['x'] - center_x)**2 + (pos['y'] - center_y)**2)
+            
+            if distance > max_distance:
+                max_distance = distance
+                max_movement_index = i
+            
+            # If we return to center, stop looking
+            if self._is_near_center(pos, center_x, center_y, tolerance_x, tolerance_y):
+                if i > start_index + 2:  # Need at least some movement
+                    break
+        
+        # Check if we found a significant movement
+        min_movement_threshold = adaptive_thresholds.get('min_movement_threshold', self.movement_config.min_movement_threshold)
+        min_movement_norm = min_movement_threshold / frame_width  # Convert to normalized coordinates
+        
+        if max_distance < min_movement_norm:
+            return None
+        
+        # Find the end of the pattern (return to center)
+        end_index = max_movement_index
+        for i in range(max_movement_index, len(positions)):
+            if self._is_near_center(positions[i], center_x, center_y, tolerance_x, tolerance_y):
+                end_index = i
+                break
+        
+        # Calculate movement from start to max movement point
+        start_pos = positions[start_index]
+        max_pos = positions[max_movement_index]
+        
+        movement_data = self._calculate_movement_magnitude(start_pos, max_pos, frame_width, frame_height)
+        
+        # Determine direction
+        if movement_data['abs_dx'] > movement_data['abs_dy']:
+            # Horizontal movement
+            if movement_data['dx_pixels'] > 0:
+                direction = 'right'
+            else:
+                direction = 'left'
+        else:
+            # Vertical movement
+            if movement_data['dy_pixels'] > 0:
+                direction = 'down'
+            else:
+                direction = 'up'
+        
+        # Prepare movement data for confidence scoring
+        movement_info = {
+            'direction': direction,
+            'magnitude': movement_data['magnitude'],
+            'dx_pixels': movement_data['dx_pixels'],
+            'dy_pixels': movement_data['dy_pixels'],
+            'dx_norm': movement_data['dx_norm'],
+            'dy_norm': movement_data['dy_norm'],
+            'timestamp': max_pos.get('timestamp', time.time()),
+            'start_position': (start_pos['x'], start_pos['y']),
+            'end_position': (max_pos['x'], max_pos['y']),
+            'frame_indices': (start_index, max_movement_index)
+        }
+        
+        # Calculate confidence score
+        enhanced_movement = self.confidence_scorer.calculate_comprehensive_confidence(
+            movement_info, frame_context, []
+        )
+        
+        # Only return if confidence is high enough
+        if enhanced_movement.confidence > self.movement_config.min_confidence_threshold:
+            return {
+                'direction': enhanced_movement.direction,
+                'confidence': enhanced_movement.confidence,
+                'start_time': start_pos['timestamp'],
+                'end_time': positions[end_index]['timestamp'],
+                'magnitude': enhanced_movement.magnitude,
+                'start_index': start_index,
+                'end_index': end_index,
+                'max_movement_index': max_movement_index,
+                'dx_pixels': enhanced_movement.dx_pixels,
+                'dy_pixels': enhanced_movement.dy_pixels,
+                'dx_norm': enhanced_movement.dx_norm,
+                'dy_norm': enhanced_movement.dy_norm,
+                'raw_confidence': enhanced_movement.raw_confidence,
+                'temporal_confidence': enhanced_movement.temporal_confidence,
+                'consistency_score': enhanced_movement.consistency_score,
+                'pattern_type': 'center_to_center'
+            }
+        
+        return None
 
 
 

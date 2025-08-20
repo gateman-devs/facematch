@@ -54,28 +54,28 @@ class SequenceMatchResult:
 @dataclass
 class ValidationConfig:
     """Configuration for flexible sequence validation."""
-    # Timing tolerance settings
-    max_timing_variation: float = 2.0  # Maximum timing variation in seconds
-    pause_tolerance: float = 3.0  # Maximum pause duration in seconds
-    min_movement_duration: float = 0.5  # Minimum movement duration
+    # Timing tolerance settings (disabled for center-to-center movements)
+    max_timing_variation: float = float('inf')  # No timing constraints
+    pause_tolerance: float = float('inf')  # No pause constraints
+    min_movement_duration: float = 0.0  # No minimum duration
     
-    # Speed adaptation settings
-    speed_adaptation_enabled: bool = True
-    min_speed_factor: float = 0.5  # Minimum speed (50% of normal)
-    max_speed_factor: float = 2.0  # Maximum speed (200% of normal)
+    # Speed adaptation settings (disabled for center-to-center movements)
+    speed_adaptation_enabled: bool = False  # No speed constraints
+    min_speed_factor: float = 0.0  # No minimum speed
+    max_speed_factor: float = float('inf')  # No maximum speed
     
     # Extra movement tolerance
-    max_extra_movements: int = 3  # Maximum extra movements to ignore
-    extra_movement_penalty: float = 0.1  # Penalty per extra movement
+    max_extra_movements: int = 5  # More tolerance for extra movements
+    extra_movement_penalty: float = 0.05  # Reduced penalty per extra movement
     
-    # Accuracy thresholds
-    exact_match_threshold: float = 0.95
-    flexible_match_threshold: float = 0.80
-    minimum_match_threshold: float = 0.65
+    # Accuracy thresholds (more lenient for center-to-center)
+    exact_match_threshold: float = 0.85
+    flexible_match_threshold: float = 0.70
+    minimum_match_threshold: float = 0.55
     
-    # Confidence requirements
-    min_movement_confidence: float = 0.3
-    min_average_confidence: float = 0.5
+    # Confidence requirements (more lenient)
+    min_movement_confidence: float = 0.2
+    min_average_confidence: float = 0.4
 
 
 class FlexibleSequenceValidator:
@@ -354,14 +354,8 @@ class FlexibleSequenceValidator:
         base_accuracy = match_count / len(expected_sequence)
         confidence_factor = sum(confidence_scores) / len(confidence_scores)
         
-        # Apply timing penalty for excessive gaps (pauses)
-        timing_penalty = 0.0
-        if temporal_gaps:
-            avg_gap = sum(temporal_gaps) / len(temporal_gaps)
-            if avg_gap > self.config.pause_tolerance:
-                timing_penalty = min(0.2, (avg_gap - self.config.pause_tolerance) * 0.1)
-        
-        final_accuracy = (base_accuracy * confidence_factor) - timing_penalty
+        # No timing penalties for center-to-center movements
+        final_accuracy = base_accuracy * confidence_factor
         
         # Determine if match is successful
         threshold = self.config.exact_match_threshold if strict else self.config.flexible_match_threshold
@@ -776,4 +770,23 @@ def create_lenient_validation_config() -> ValidationConfig:
         minimum_match_threshold=0.55,
         min_movement_confidence=0.2,
         min_average_confidence=0.4
+    )
+
+
+def create_center_to_center_validation_config() -> ValidationConfig:
+    """Create validation configuration specifically for center-to-center movements."""
+    return ValidationConfig(
+        max_timing_variation=float('inf'),  # No timing constraints
+        pause_tolerance=float('inf'),  # No pause constraints
+        min_movement_duration=0.0,  # No minimum duration
+        speed_adaptation_enabled=False,  # No speed constraints
+        min_speed_factor=0.0,  # No minimum speed
+        max_speed_factor=float('inf'),  # No maximum speed
+        max_extra_movements=8,  # Very tolerant of extra movements
+        extra_movement_penalty=0.02,  # Minimal penalty for extra movements
+        exact_match_threshold=0.80,  # More lenient thresholds
+        flexible_match_threshold=0.65,
+        minimum_match_threshold=0.50,
+        min_movement_confidence=0.15,  # Lower confidence requirements
+        min_average_confidence=0.35
     )
